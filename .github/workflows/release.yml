@@ -35,6 +35,7 @@ jobs:
       - name: Cross-compile
         env:
           CGO_ENABLED: "0"
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           mkdir -p dist
           # Stdlib-only, so a static cross-build needs no cgo.
@@ -42,7 +43,8 @@ jobs:
             os="${target%/*}"; arch="${target#*/}"
             out="dist/rindler-${os}-${arch}"
             echo "building $out"
-            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w" -o "$out" .
+            GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X main.version=${TAG#rindler-cli-v}" -o "$out" .
           done
           cd dist && sha256sum rindler-* > SHA256SUMS.txt && cat SHA256SUMS.txt
 

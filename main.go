@@ -20,7 +20,11 @@ import (
 	"time"
 )
 
-const version = "0.1.0"
+// version is stamped at release time by the workflow
+// (-ldflags "-X main.version=<tag without the rindler-cli-v prefix>"). It stays a
+// var, not a const, precisely so that works: a const cannot be set by -X, which is
+// how a hardcoded "0.1.0" would keep being reported by every later tag.
+var version = "dev"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
