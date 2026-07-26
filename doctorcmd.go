@@ -195,10 +195,10 @@ func pingAPI(ctx context.Context, httpc *http.Client, apiBase, key string) check
 	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<16))
 	switch res.StatusCode {
 	case http.StatusOK:
-		var sites []siteSummary
-		_ = json.Unmarshal(body, &sites)
+		var resp configsResponse
+		_ = json.Unmarshal(body, &resp)
 		return check{Name: "api reachable", State: checkOK,
-			Detail: fmt.Sprintf("%d site(s) available", len(sites))}
+			Detail: fmt.Sprintf("%d site(s) available", len(resp.Configs))}
 	case http.StatusUnauthorized:
 		return check{Name: "api reachable", State: checkFail,
 			Detail: "the key is not accepted (expired or revoked)", Fix: "rindler login"}

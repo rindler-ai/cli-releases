@@ -7,7 +7,7 @@
 // already learned the vocabulary somewhere else.
 //
 // Wire contract:
-//   GET <api>/v1/runtime/configs           -> [{domain, version, authed, action_count}]
+//   GET <api>/v1/runtime/configs           -> {configs:[{domain, version, authed, action_count}]}
 //   GET <api>/v1/runtime/configs/{domain}  -> {domain, version, screens:[{name, actions:[…]}]}
 //
 // The action surface is served REDACTED (the server): action_name
@@ -30,6 +30,15 @@ import (
 	"text/tabwriter"
 	"time"
 )
+
+// configsResponse is the REAL envelope: GET /v1/runtime/configs returns
+// {"configs":[...]}, not a bare array (the server
+// Decoding it as an array
+// silently yielded zero sites against the live server while the unit tests --
+// written against the assumed shape -- stayed green. Caught by a live run.
+type configsResponse struct {
+	Configs []siteSummary `json:"configs"`
+}
 
 type siteSummary struct {
 	Domain      string `json:"domain"`
@@ -104,11 +113,12 @@ func runSites(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	var sites []siteSummary
-	if err := getJSON(ctx, defaultHTTPClient(), apiBase, key, "/v1/runtime/configs", &sites); err != nil {
+	var resp configsResponse
+	if err := getJSON(ctx, defaultHTTPClient(), apiBase, key, "/v1/runtime/configs", &resp); err != nil {
 		fmt.Fprintln(os.Stderr, "sites:", err)
 		return 1
 	}
+	sites := resp.Configs
 	if *jsonOut {
 		b, _ := json.MarshalIndent(sites, "", "  ")
 		fmt.Println(string(b))
@@ -145,14 +155,15 @@ func runActions(args []string) int {
 	apiBaseFlag := fs.String("api-base", "", "Rindler API origin")
 	jsonOut := fs.Bool("json", false, "print the raw JSON detail")
 	all := fs.Bool("all", false, "include actions that are currently disabled")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseAnyOrder(fs, args)
+	if err != nil {
 		return 2
 	}
-	if fs.NArg() < 1 {
+	if len(rest) < 1 {
 		fmt.Fprintln(os.Stderr, "usage: rindler actions <site> [--all] [--json]")
 		return 2
 	}
-	host, err := siteFromTarget(fs.Arg(0))
+	host, err := siteFromTarget(rest[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "actions:", err)
 		return 2

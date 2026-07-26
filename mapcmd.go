@@ -101,14 +101,15 @@ func runMap(args []string) int {
 	apiBaseFlag := fs.String("api-base", "", "Rindler API origin (defaults to the one you logged in against)")
 	timeout := fs.Duration("timeout", 30*time.Minute, "how long to follow the run before giving up")
 	noWait := fs.Bool("no-wait", false, "start the run and print the job id instead of following it")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseAnyOrder(fs, args)
+	if err != nil {
 		return 2
 	}
-	if fs.NArg() < 1 {
+	if len(rest) < 1 {
 		fmt.Fprintln(os.Stderr, "usage: rindler map <url> [--mode fast|deep] [--no-wait]")
 		return 2
 	}
-	target, err := normalizeMapTarget(fs.Arg(0))
+	target, err := normalizeMapTarget(rest[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "map:", err)
 		return 2
@@ -161,14 +162,15 @@ func runMapStatus(args []string) int {
 	apiBaseFlag := fs.String("api-base", "", "Rindler API origin (defaults to the one you logged in against)")
 	timeout := fs.Duration("timeout", 30*time.Minute, "how long to follow the run before giving up")
 	once := fs.Bool("once", false, "print the current status and exit instead of following")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseAnyOrder(fs, args)
+	if err != nil {
 		return 2
 	}
-	if fs.NArg() < 1 {
+	if len(rest) < 1 {
 		fmt.Fprintln(os.Stderr, "usage: rindler map status <job-id> [--once]")
 		return 2
 	}
-	jobID := fs.Arg(0)
+	jobID := rest[0]
 
 	cfg, _ := loadConfig()
 	store, _, err := newCredentialStore()

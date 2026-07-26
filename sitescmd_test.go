@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,19 +14,41 @@ func TestGetJSONSendsBearerAndDecodes(t *testing.T) {
 	var auth, path string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth, path = r.Header.Get("Authorization"), r.URL.Path
-		_, _ = w.Write([]byte(`[{"domain":"example.com","version":3,"authed":true,"action_count":7}]`))
+		// The REAL envelope. A live run against the dev API proved the list is
+		// wrapped in {"configs": …}; the earlier fixture used a bare array, so the
+		// test passed while the command returned zero sites against the server.
+		_, _ = w.Write([]byte(`{"configs":[{"domain":"example.com","version":3,"authed":true,"action_count":7}]}`))
 	}))
 	defer srv.Close()
 
-	var out []siteSummary
+	var out configsResponse
 	if err := getJSON(context.Background(), srv.Client(), srv.URL, "k", "/v1/runtime/configs", &out); err != nil {
 		t.Fatalf("getJSON errored: %v", err)
 	}
 	if auth != "Bearer k" || path != "/v1/runtime/configs" {
 		t.Errorf("auth=%q path=%q", auth, path)
 	}
-	if len(out) != 1 || out[0].Domain != "example.com" || out[0].ActionCount == nil || *out[0].ActionCount != 7 {
+	if len(out.Configs) != 1 || out.Configs[0].Domain != "example.com" ||
+		out.Configs[0].ActionCount == nil || *out.Configs[0].ActionCount != 7 {
 		t.Errorf("decoded = %+v", out)
+	}
+}
+
+// Pins the envelope shapes against the live contract, in both directions: the
+// LIST is wrapped, the DETAIL is not (the server).
+// Getting either backwards decodes to an empty struct with no error.
+func TestConfigEnvelopeShapes(t *testing.T) {
+	var list configsResponse
+	if err := json.Unmarshal([]byte(`{"configs":[{"domain":"a.com"}]}`), &list); err != nil || len(list.Configs) != 1 {
+		t.Fatalf("list must decode from the wrapped envelope: %v %+v", err, list)
+	}
+	// A bare array must NOT decode into it -- that is the bug this pins.
+	if err := json.Unmarshal([]byte(`[{"domain":"a.com"}]`), &list); err == nil {
+		t.Error("a bare array should fail to decode as the wrapped list envelope")
+	}
+	var detail siteDetail
+	if err := json.Unmarshal([]byte(`{"domain":"a.com","version":2,"screens":[]}`), &detail); err != nil || detail.Domain != "a.com" {
+		t.Fatalf("detail must decode UNWRAPPED: %v %+v", err, detail)
 	}
 }
 

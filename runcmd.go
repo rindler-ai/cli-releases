@@ -465,14 +465,15 @@ func runRunStatus(args []string) int {
 	timeout := fs.Duration("timeout", 15*time.Minute, "how long to follow the run")
 	once := fs.Bool("once", false, "print the current state and exit instead of following")
 	jsonOut := fs.Bool("json", false, "print the job envelope as JSON")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseAnyOrder(fs, args)
+	if err != nil {
 		return 2
 	}
-	if fs.NArg() < 1 {
+	if len(rest) < 1 {
 		fmt.Fprintln(os.Stderr, "usage: rindler run status <job-id> [--once] [--json]")
 		return 2
 	}
-	jobID := fs.Arg(0)
+	jobID := rest[0]
 	key, apiBase, code := resolveKeyAndBase(*apiBaseFlag, "run status")
 	if code != 0 {
 		return code

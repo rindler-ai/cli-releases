@@ -101,7 +101,7 @@ func TestDiagnoseWarnsOnNonDefaultAPIOrigin(t *testing.T) {
 
 func TestPingAPIClassifies(t *testing.T) {
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`[{"domain":"a.com"},{"domain":"b.com"}]`))
+		_, _ = w.Write([]byte(`{"configs":[{"domain":"a.com"},{"domain":"b.com"}]}`))
 	}))
 	defer ok.Close()
 	if c := pingAPI(context.Background(), ok.Client(), ok.URL, "k"); c.State != checkOK || !strings.Contains(c.Detail, "2 site") {
