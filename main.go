@@ -60,6 +60,8 @@ func run(args []string) int {
 		return runActions(args[1:])
 	case "creds", "credentials":
 		return runCreds(args[1:])
+	case "device", "devices":
+		return runDevice(args[1:])
 	case "doctor":
 		return runDoctor(args[1:])
 	case "mcp":
@@ -136,6 +138,20 @@ func runLogout(args []string) int {
 	}
 	if err := clearConfig(); err != nil {
 		fmt.Fprintln(os.Stderr, "warning: could not clear config:", err)
+	}
+	// Retire this machine's device enrollment too. Signing out of a machine that
+	// still appears paired -- and still holds a device token and private key --
+	// is the wrong default: the dashboard would keep offering to route logins to
+	// a device that is no longer signed in.
+	if deviceIsPaired() {
+		dctx, dcancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := unpairDevice(dctx, defaultHTTPClient())
+		dcancel()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "warning: could not fully unpair this device:", err)
+		} else {
+			fmt.Println("✓ Unpaired this machine.")
+		}
 	}
 	fmt.Println("Removing the Rindler MCP from your agents:")
 	printAgentResults(os.Stdout, "removed", removeAllAgents())
