@@ -30,6 +30,11 @@ const (
 	relayReconnectMin = 2 * time.Second
 	relayReconnectMax = 60 * time.Second
 	relayHelloTimeout = 20 * time.Second
+	// A relay that goes quiet is reaped by intermediaries long before anything
+	// notices, and the symptom is not an error -- it is a login that reports "no
+	// device holds this credential" because the socket happened to be down when
+	// the server asked. Ping well inside the usual 60s idle windows.
+	relayKeepalive = 20 * time.Second
 )
 
 // runRelay connects and serves until ctx is cancelled, reconnecting with backoff.
@@ -99,6 +104,30 @@ func relaySession(ctx context.Context, d deviceIdentity, verbose bool) error {
 	if verbose {
 		fmt.Fprintf(os.Stderr, "relay: connected as device %s\n", ack.DeviceID)
 	}
+
+	// Keepalive. Without it the socket is idle between logins -- which is almost
+	// all of the time -- and gets dropped; the reconnect backoff then leaves
+	// windows where the device is paired but unreachable.
+	pingCtx, stopPing := context.WithCancel(ctx)
+	defer stopPing()
+	go func() {
+		t := time.NewTicker(relayKeepalive)
+		defer t.Stop()
+		for {
+			select {
+			case <-pingCtx.Done():
+				return
+			case <-t.C:
+				pctx, cancel := context.WithTimeout(pingCtx, 10*time.Second)
+				err := c.Ping(pctx)
+				cancel()
+				if err != nil {
+					// The read loop will surface the closure; nothing to do here.
+					return
+				}
+			}
+		}
+	}()
 
 	for {
 		var msg relayWire

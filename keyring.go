@@ -11,7 +11,7 @@ import (
 // Credential storage for the rindler CLI. The rindler_live_ key is a
 // secret and lives in the OS keyring when one is available (the custody-daemon
 // exec-based pattern, service "rindler-cli"); otherwise it falls back to a 0600
-// file with an explicit warning (never silent plaintext — the gh  trap).
+// file with an explicit warning (never silent plaintext — the gh trap).
 // Non-secret metadata lives separately in config.json (config.go).
 
 // keyringBackend is the minimal OS-keychain surface, satisfied by the
