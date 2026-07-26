@@ -92,11 +92,11 @@ func TestPrintActionsRendersRunnableNames(t *testing.T) {
 				{ActionName: "add_to_cart", Method: "act", Enabled: true},
 			},
 		}},
-	}, false)
+	}, false, false)
 	out := buf.String()
 	for _, want := range []string{
-		"example.com", "needs login", "search_products", "read",
-		"--input query=… (required)", "add_to_cart", "act",
+		"example.com", "needs login", "search_products", "reads", "writes",
+		"--input query=…*", "add_to_cart", "act",
 		"rindler run --site example.com",
 	} {
 		if !strings.Contains(out, want) {
@@ -111,8 +111,8 @@ func TestPrintActionsHidesDisabledUnlessAsked(t *testing.T) {
 		Actions: []projAction{{ActionName: "gone", Enabled: false}},
 	}}}
 	var hidden, shown bytes.Buffer
-	printActions(&hidden, d, false)
-	printActions(&shown, d, true)
+	printActions(&hidden, d, false, false)
+	printActions(&shown, d, true, false)
 	if strings.Contains(hidden.String(), "gone") {
 		t.Error("a disabled action must be hidden by default")
 	}
@@ -132,8 +132,70 @@ func TestPrintActionsDeduplicatesGlobals(t *testing.T) {
 	printActions(&buf, siteDetail{Domain: "e.com", Screens: []projScreen{
 		{Name: "one", Actions: []projAction{global}},
 		{Name: "two", Actions: []projAction{global}},
-	}}, false)
+	}}, false, false)
 	if got := strings.Count(buf.String(), "login"); got != 1 {
 		t.Errorf("global action should be listed once, appeared %d times:\n%s", got, buf.String())
+	}
+}
+
+// The Gmail map lists 11 distinct actions across 5 screens; the screen-grouped
+// view rendered 31 rows with view_inbox five times. `run` takes the NAME, so the
+// screen it was found under changes nothing — dedup by name is the menu.
+func TestPrintActionsDeduplicatesAcrossScreens(t *testing.T) {
+	view := projAction{ActionName: "view_inbox", Method: "read", Enabled: true}
+	search := projAction{ActionName: "search_mail", Method: "read", Enabled: true}
+	d := siteDetail{Domain: "mail.example", Screens: []projScreen{
+		{Name: "inbox", Actions: []projAction{view, search}},
+		{Name: "label_view", Actions: []projAction{view, search}},
+		{Name: "search_results", Actions: []projAction{view}},
+	}}
+
+	var flat bytes.Buffer
+	printActions(&flat, d, false, false)
+	if got := strings.Count(flat.String(), "view_inbox"); got != 1 {
+		t.Errorf("deduped view should list view_inbox once, got %d:\n%s", got, flat.String())
+	}
+	if !strings.Contains(flat.String(), "2 action(s)") {
+		t.Errorf("should report the DISTINCT count, got:\n%s", flat.String())
+	}
+
+	// --by-screen deliberately keeps the repetition, because that view is about
+	// topology.
+	var grouped bytes.Buffer
+	printActions(&grouped, d, false, true)
+	if got := strings.Count(grouped.String(), "view_inbox"); got != 3 {
+		t.Errorf("--by-screen should show it per screen, got %d", got)
+	}
+}
+
+// Reads before writes: trying a reader is the safe move, so it comes first.
+func TestPrintActionsOrdersReadsBeforeWrites(t *testing.T) {
+	var buf bytes.Buffer
+	printActions(&buf, siteDetail{Domain: "e.com", Screens: []projScreen{{
+		Name: "s",
+		Actions: []projAction{
+			{ActionName: "delete_thing", Method: "act", Enabled: true},
+			{ActionName: "view_thing", Method: "read", Enabled: true},
+		},
+	}}}, false, false)
+	out := buf.String()
+	if strings.Index(out, "view_thing") > strings.Index(out, "delete_thing") {
+		t.Errorf("reads should be listed before writes, got:\n%s", out)
+	}
+	if !strings.Contains(out, "reads") || !strings.Contains(out, "writes") {
+		t.Errorf("output should label the two groups, got:\n%s", out)
+	}
+}
+
+func TestFirstSentenceTrims(t *testing.T) {
+	if got := firstSentence("Open the inbox. Then do more things that go on."); got != "Open the inbox." {
+		t.Errorf("got %q", got)
+	}
+	long := strings.Repeat("x", 200)
+	if got := firstSentence(long); len(got) > 100 {
+		t.Errorf("should cap long descriptions, got %d chars", len(got))
+	}
+	if got := firstSentence("  multi\nline  "); got != "multi line" {
+		t.Errorf("newlines should collapse, got %q", got)
 	}
 }

@@ -155,6 +155,7 @@ func runActions(args []string) int {
 	apiBaseFlag := fs.String("api-base", "", "Rindler API origin")
 	jsonOut := fs.Bool("json", false, "print the raw JSON detail")
 	all := fs.Bool("all", false, "include actions that are currently disabled")
+	byScreen := fs.Bool("by-screen", false, "group actions by screen instead of deduplicating them")
 	rest, err := parseAnyOrder(fs, args)
 	if err != nil {
 		return 2
@@ -186,36 +187,111 @@ func runActions(args []string) int {
 		fmt.Println(string(b))
 		return 0
 	}
-	printActions(os.Stdout, detail, *all)
+	printActions(os.Stdout, detail, *all, *byScreen)
 	return 0
 }
 
 // printActions renders the action surface as the thing a user copies into a
 // `run` invocation: the action_name, whether it reads or acts, and its inputs.
-func printActions(out io.Writer, detail siteDetail, includeDisabled bool) {
+//
+// DEDUPED BY ACTION NAME by default. A config lists each action under every
+// screen it is reachable from, so the Gmail map -- 11 distinct actions across 5
+// screens -- rendered 31 rows, with view_inbox appearing five times. That is a
+// transcript, not a menu, and `run` takes the action NAME anyway: which screen it
+// was found under changes nothing about how you invoke it. --by-screen restores
+// the grouped view for anyone who wants the topology.
+func printActions(out io.Writer, detail siteDetail, includeDisabled, byScreen bool) {
 	fmt.Fprintf(out, "%s (v%d)", detail.Domain, detail.Version)
 	if detail.Authed {
 		fmt.Fprint(out, "  [needs login]")
 	}
 	fmt.Fprintln(out)
 
-	shown := 0
-	seen := map[string]bool{}
+	if byScreen {
+		printActionsByScreen(out, detail, includeDisabled)
+		return
+	}
+
+	type entry struct {
+		a       projAction
+		screens []string
+	}
+	var order []string
+	seen := map[string]*entry{}
 	for _, sc := range detail.Screens {
-		var rows []projAction
 		for _, a := range sc.Actions {
 			if !a.Enabled && !includeDisabled {
 				continue
 			}
-			// A global action repeats on every screen; listing it once keeps the
-			// output a menu rather than a transcript.
-			if a.Global {
-				if seen[a.ActionName] {
-					continue
-				}
-				seen[a.ActionName] = true
+			e, ok := seen[a.ActionName]
+			if !ok {
+				e = &entry{a: a}
+				seen[a.ActionName] = e
+				order = append(order, a.ActionName)
 			}
-			rows = append(rows, a)
+			if sc.Name != "" {
+				e.screens = append(e.screens, sc.Name)
+			}
+		}
+	}
+	if len(order) == 0 {
+		fmt.Fprintln(out, "\n  No enabled actions. Try --all to include disabled ones.")
+		return
+	}
+	// Reads first, then writes: a reader is the safe thing to try, and grouping
+	// them separates "look at the site" from "change something on it".
+	sort.SliceStable(order, func(i, j int) bool {
+		li, lj := seen[order[i]].a.Method != "act", seen[order[j]].a.Method != "act"
+		if li != lj {
+			return li
+		}
+		return order[i] < order[j]
+	})
+
+	lastKind := ""
+	for _, name := range order {
+		e := seen[name]
+		kind := e.a.Method
+		if kind == "" {
+			kind = "read"
+		}
+		if kind != lastKind {
+			fmt.Fprintf(out, "\n  %s\n", map[string]string{"read": "reads", "act": "writes"}[kind])
+			lastKind = kind
+		}
+		line := fmt.Sprintf("    %-24s", name)
+		if !e.a.Enabled {
+			line += " (disabled)"
+		}
+		fmt.Fprintln(out, line)
+		if len(e.a.Params) > 0 {
+			parts := make([]string, 0, len(e.a.Params))
+			for _, p := range e.a.Params {
+				s := "--input " + p.Name + "=…"
+				if p.Required {
+					s += "*"
+				}
+				parts = append(parts, s)
+			}
+			fmt.Fprintf(out, "      %s\n", strings.Join(parts, "  "))
+		}
+		if d := firstSentence(e.a.Description); d != "" {
+			fmt.Fprintf(out, "      %s\n", d)
+		}
+	}
+	fmt.Fprintf(out, "\n%d action(s); * = required. Grouped by screen: --by-screen\n", len(order))
+	fmt.Fprintf(out, "Run one:  rindler run --site %s --action <name>\n", detail.Domain)
+}
+
+// printActionsByScreen is the original topology view, behind --by-screen.
+func printActionsByScreen(out io.Writer, detail siteDetail, includeDisabled bool) {
+	shown := 0
+	for _, sc := range detail.Screens {
+		var rows []projAction
+		for _, a := range sc.Actions {
+			if a.Enabled || includeDisabled {
+				rows = append(rows, a)
+			}
 		}
 		if len(rows) == 0 {
 			continue
@@ -231,25 +307,11 @@ func printActions(out io.Writer, detail siteDetail, includeDisabled bool) {
 			if kind == "" {
 				kind = "read"
 			}
-			line := fmt.Sprintf("    %-26s %s", a.ActionName, kind)
+			line := fmt.Sprintf("    %-24s %s", a.ActionName, kind)
 			if !a.Enabled {
 				line += " (disabled)"
 			}
 			fmt.Fprintln(out, line)
-			if len(a.Params) > 0 {
-				parts := make([]string, 0, len(a.Params))
-				for _, p := range a.Params {
-					s := "--input " + p.Name + "=…"
-					if p.Required {
-						s += " (required)"
-					}
-					parts = append(parts, s)
-				}
-				fmt.Fprintf(out, "      %s\n", strings.Join(parts, "  "))
-			}
-			if a.Description != "" {
-				fmt.Fprintf(out, "      %s\n", a.Description)
-			}
 		}
 	}
 	if shown == 0 {
@@ -257,4 +319,22 @@ func printActions(out io.Writer, detail siteDetail, includeDisabled bool) {
 		return
 	}
 	fmt.Fprintf(out, "\nRun one:  rindler run --site %s --action <name>\n", detail.Domain)
+}
+
+// firstSentence trims a description to its first sentence, capped. Action
+// descriptions are written for an agent and run long; a discovery listing needs
+// one scannable line, not a paragraph per row.
+func firstSentence(d string) string {
+	d = strings.TrimSpace(strings.ReplaceAll(d, "\n", " "))
+	if d == "" {
+		return ""
+	}
+	if i := strings.Index(d, ". "); i > 0 {
+		d = d[:i+1]
+	}
+	const cap = 96
+	if len(d) > cap {
+		d = strings.TrimSpace(d[:cap]) + "…"
+	}
+	return d
 }
