@@ -267,4 +267,3 @@ func readWire(ctx context.Context, c *websocket.Conn, out *relayWire) error {
 	}
 	return json.Unmarshal(b, out)
 }
-
