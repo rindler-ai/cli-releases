@@ -228,15 +228,16 @@ func TestMCPInstallStatusRemoveLifecycle(t *testing.T) {
 	}
 }
 
-// `rindler install mcp` is the alias for `rindler mcp install`.
-func TestInstallAliasWorks(t *testing.T) {
-	dir := isolate(t)
-	t.Setenv("RINDLER_API_KEY", "rindler_live_test")
-	if code := run([]string{"install", "mcp"}); code != 0 {
-		t.Fatalf("`install mcp` alias should exit 0, got %d", code)
+// `rindler install` is deliberately NOT a command: on a CLI, a bare "install"
+// reads as installing the tool itself, not an MCP server into an agent.
+// `rindler mcp install` is the only spelling.
+func TestBareInstallIsNotACommand(t *testing.T) {
+	isolate(t)
+	if code := run([]string{"install", "mcp"}); code != 2 {
+		t.Errorf("`install` should be an unknown command, got exit %d", code)
 	}
-	if _, err := os.ReadFile(filepath.Join(dir, "claude", ".claude.json")); err != nil {
-		t.Errorf("alias should have installed: %v", err)
+	if code := run([]string{"install"}); code != 2 {
+		t.Errorf("bare `install` should be an unknown command, got exit %d", code)
 	}
 }
 

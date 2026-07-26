@@ -62,10 +62,6 @@ func run(args []string) int {
 		return runDoctor(args[1:])
 	case "mcp":
 		return runMCP(args[1:])
-	// `rindler install mcp` reads as naturally as `rindler mcp install`, and
-	// guessing wrong should not be a usage error.
-	case "install":
-		return runMCP(append([]string{"install"}, args[1:]...))
 	case "version", "--version", "-v":
 		fmt.Println("rindler", version)
 		return 0
