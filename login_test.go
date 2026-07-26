@@ -143,3 +143,15 @@ func TestRunDispatch(t *testing.T) {
 		t.Error("no args should exit 2")
 	}
 }
+
+// The default is the whole point of the change: a plain `rindler login` must ask
+// for mapping. If this flips back to opt-in, every new key is silently denied the
+// mapper and `rindler map` 403s with no hint why.
+func TestMappingIsRequestedByDefault(t *testing.T) {
+	if !mappingRequested(false) {
+		t.Fatal("a plain `rindler login` must request site-mapping capability")
+	}
+	if mappingRequested(true) {
+		t.Fatal("--no-map must opt out")
+	}
+}

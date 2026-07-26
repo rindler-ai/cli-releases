@@ -29,7 +29,9 @@ against `SHA256SUMS.txt`, `chmod +x`, and put it on your `PATH`.
 
 | Command | What it does |
 |---|---|
-| `rindler login [--paste] [--map] [--no-mcp]` | Sign in, mint a session-bound key, install the MCP into Claude Code + Codex |
+| `rindler login [--paste] [--no-map] [--no-mcp]` | Sign in, mint a session-bound key, install the MCP into Claude Code + Codex |
+| `rindler map <url> [--mode fast\|deep]` | Map a site and follow the run to a verdict |
+| `rindler map status <job-id> [--once]` | Follow a run you already started |
 | `rindler logout` | Best-effort server-side revoke, then clear local + agent config |
 | `rindler status` | Login + MCP-install status |
 | `rindler whoami` | The signed-in account |

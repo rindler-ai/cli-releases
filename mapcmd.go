@@ -1,0 +1,301 @@
+// `rindler map <url>` — start a site mapping run and follow it to a verdict.
+//
+// Wire contract (server): POST <api>/v1/runtime/map {url, mode} -> {job_id}, then
+// GET <api>/v1/runtime/map/status/{job_id} -> {status, message, envelope{domain}}.
+// Both sit behind the same per-key mapper authorization, which is why `rindler
+// login` requests mapping by default (see login.go).
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"time"
+)
+
+// mapPollInterval is how often the status endpoint is polled while a run is in
+// flight. A mapping crawl runs for minutes, so a tight loop would be pure noise
+// against the API for no better answer.
+const mapPollInterval = 5 * time.Second
+
+type mapStartResponse struct {
+	JobID string `json:"job_id"`
+}
+
+type mapStatusResponse struct {
+	Status   string `json:"status"`
+	Message  string `json:"message"`
+	Envelope struct {
+		Domain string `json:"domain"`
+	} `json:"envelope"`
+}
+
+// mapTerminal reports whether a status string ends the run, and whether it won.
+func mapTerminal(status string) (done bool, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "complete", "completed", "success", "succeeded", "done":
+		return true, true
+	case "error", "failed", "failure", "cancelled", "canceled", "timeout":
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+// normalizeMapTarget accepts what a human types ("example.com") and returns a URL
+// the server will accept. A bare host is assumed https.
+func normalizeMapTarget(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", fmt.Errorf("no URL given")
+	}
+	if !strings.Contains(s, "://") {
+		s = "https://" + s
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return "", fmt.Errorf("not a valid URL: %s", raw)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("unsupported scheme %q (use http or https)", u.Scheme)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("not a valid URL: %s", raw)
+	}
+	return u.String(), nil
+}
+
+// mapAuthError turns the server's authorization refusals into the actionable
+// sentence each one actually implies, instead of a bare status code.
+func mapAuthError(code int, body string) error {
+	switch code {
+	case http.StatusUnauthorized:
+		return fmt.Errorf("not logged in or the key expired — run `rindler login`")
+	case http.StatusForbidden:
+		return fmt.Errorf("this key cannot map. Run `rindler status`: if it says (runtime) " +
+			"rather than (runtime + mapping), log in again — and if mapping is still absent, " +
+			"your workspace is not entitled to it")
+	case http.StatusServiceUnavailable:
+		return fmt.Errorf("mapping is not available on this deployment")
+	}
+	return fmt.Errorf("map failed (HTTP %d): %s", code, strings.TrimSpace(body))
+}
+
+func runMap(args []string) int {
+	// `rindler map status <jobId>` — resume following a run started with --no-wait
+	// or abandoned by a timeout. Both of those paths tell the user to run exactly
+	// this, so it has to exist.
+	if len(args) >= 1 && args[0] == "status" {
+		return runMapStatus(args[1:])
+	}
+	fs := flag.NewFlagSet("map", flag.ContinueOnError)
+	mode := fs.String("mode", "fast", "mapping depth: fast or deep")
+	apiBaseFlag := fs.String("api-base", "", "Rindler API origin (defaults to the one you logged in against)")
+	timeout := fs.Duration("timeout", 30*time.Minute, "how long to follow the run before giving up")
+	noWait := fs.Bool("no-wait", false, "start the run and print the job id instead of following it")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: rindler map <url> [--mode fast|deep] [--no-wait]")
+		return 2
+	}
+	target, err := normalizeMapTarget(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "map:", err)
+		return 2
+	}
+
+	cfg, _ := loadConfig()
+	store, _, err := newCredentialStore()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "map:", err)
+		return 1
+	}
+	key, _, err := resolveActiveKey(store)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "map:", err)
+		return 1
+	}
+	if key == "" {
+		fmt.Fprintln(os.Stderr, "not logged in — run `rindler login` first (or set RINDLER_API_KEY)")
+		return 1
+	}
+	apiBase := *apiBaseFlag
+	if apiBase == "" {
+		apiBase = cfg.APIBase
+	}
+	if apiBase == "" {
+		apiBase = defaultAPIBase
+	}
+	apiBase = strings.TrimRight(apiBase, "/")
+
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	httpc := defaultHTTPClient()
+
+	jobID, err := startMap(ctx, httpc, apiBase, key, target, *mode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "map:", err)
+		return 1
+	}
+	fmt.Printf("Mapping %s (%s)…\njob %s\n", target, *mode, jobID)
+	if *noWait {
+		fmt.Printf("Follow it with: rindler map status %s\n", jobID)
+		return 0
+	}
+	return followMap(ctx, httpc, apiBase, key, jobID)
+}
+
+// runMapStatus follows an already-started run by job id.
+func runMapStatus(args []string) int {
+	fs := flag.NewFlagSet("map status", flag.ContinueOnError)
+	apiBaseFlag := fs.String("api-base", "", "Rindler API origin (defaults to the one you logged in against)")
+	timeout := fs.Duration("timeout", 30*time.Minute, "how long to follow the run before giving up")
+	once := fs.Bool("once", false, "print the current status and exit instead of following")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: rindler map status <job-id> [--once]")
+		return 2
+	}
+	jobID := fs.Arg(0)
+
+	cfg, _ := loadConfig()
+	store, _, err := newCredentialStore()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "map status:", err)
+		return 1
+	}
+	key, _, err := resolveActiveKey(store)
+	if err != nil || key == "" {
+		fmt.Fprintln(os.Stderr, "not logged in — run `rindler login` first (or set RINDLER_API_KEY)")
+		return 1
+	}
+	apiBase := *apiBaseFlag
+	if apiBase == "" {
+		apiBase = cfg.APIBase
+	}
+	if apiBase == "" {
+		apiBase = defaultAPIBase
+	}
+	apiBase = strings.TrimRight(apiBase, "/")
+
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	httpc := defaultHTTPClient()
+
+	if *once {
+		st, err := mapStatus(ctx, httpc, apiBase, key, jobID)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "map status:", err)
+			return 1
+		}
+		fmt.Println(strings.TrimSpace(st.Status + " " + st.Message))
+		if done, ok := mapTerminal(st.Status); done && !ok {
+			return 1
+		}
+		return 0
+	}
+	return followMap(ctx, httpc, apiBase, key, jobID)
+}
+
+func startMap(ctx context.Context, httpc *http.Client, apiBase, key, target, mode string) (string, error) {
+	payload, _ := json.Marshal(map[string]string{"url": target, "mode": mode})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+"/v1/runtime/map", bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := httpc.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusAccepted {
+		return "", mapAuthError(res.StatusCode, string(body))
+	}
+	var out mapStartResponse
+	if err := json.Unmarshal(body, &out); err != nil || out.JobID == "" {
+		return "", fmt.Errorf("server did not return a job id: %s", strings.TrimSpace(string(body)))
+	}
+	return out.JobID, nil
+}
+
+// followMap polls until the run reaches a terminal status, printing each change.
+func followMap(ctx context.Context, httpc *http.Client, apiBase, key, jobID string) int {
+	last := ""
+	for {
+		st, err := mapStatus(ctx, httpc, apiBase, key, jobID)
+		if err != nil {
+			// A transient read failure must not look like a failed MAP: the run is
+			// still going server-side, so say what actually happened and keep the
+			// job id recoverable.
+			if ctx.Err() != nil {
+				fmt.Fprintf(os.Stderr, "\nstopped following after the timeout; the run may still be going.\n"+
+					"Check it with: rindler map status %s\n", jobID)
+				return 1
+			}
+			fmt.Fprintln(os.Stderr, "map: status check failed:", err)
+			return 1
+		}
+		line := strings.TrimSpace(st.Status + " " + st.Message)
+		if line != last {
+			fmt.Println(" ", line)
+			last = line
+		}
+		if done, ok := mapTerminal(st.Status); done {
+			if ok {
+				domain := st.Envelope.Domain
+				if domain == "" {
+					domain = "the site"
+				}
+				fmt.Printf("\n✓ Mapped %s.\n", domain)
+				return 0
+			}
+			fmt.Fprintf(os.Stderr, "\n✗ Mapping failed: %s\n", strings.TrimSpace(st.Message))
+			return 1
+		}
+		select {
+		case <-ctx.Done():
+			fmt.Fprintf(os.Stderr, "\nstopped following after the timeout; the run may still be going.\n"+
+				"Check it with: rindler map status %s\n", jobID)
+			return 1
+		case <-time.After(mapPollInterval):
+		}
+	}
+}
+
+func mapStatus(ctx context.Context, httpc *http.Client, apiBase, key, jobID string) (mapStatusResponse, error) {
+	var out mapStatusResponse
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		apiBase+"/v1/runtime/map/status/"+url.PathEscape(jobID), nil)
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	res, err := httpc.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if res.StatusCode != http.StatusOK {
+		return out, mapAuthError(res.StatusCode, string(body))
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return out, fmt.Errorf("unreadable status response: %s", strings.TrimSpace(string(body)))
+	}
+	return out, nil
+}

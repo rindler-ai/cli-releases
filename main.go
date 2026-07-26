@@ -5,7 +5,9 @@
 //
 // Usage:
 //
-//	rindler login [--paste] [--map] [--no-mcp]
+//	rindler login [--paste] [--no-map] [--no-mcp]
+//	rindler map <url> [--mode fast|deep]
+//	rindler map status <job-id>
 //	rindler logout
 //	rindler status
 //	rindler whoami
@@ -44,8 +46,14 @@ func run(args []string) int {
 		return runStatus()
 	case "whoami":
 		return runWhoami()
+	case "map":
+		return runMap(args[1:])
 	case "mcp":
 		return runMCP(args[1:])
+	// `rindler install mcp` reads as naturally as `rindler mcp install`, and
+	// guessing wrong should not be a usage error.
+	case "install":
+		return runMCP(append([]string{"install"}, args[1:]...))
 	case "version", "--version", "-v":
 		fmt.Println("rindler", version)
 		return 0
@@ -63,13 +71,18 @@ func usage(w *os.File) {
 	fmt.Fprint(w, `rindler — the Rindler CLI
 
 Usage:
-  rindler login [--paste] [--map] [--no-mcp]   Sign in with Clerk, mint a session-bound MCP key,
-                                               and install the MCP into Claude Code + Codex
-  rindler logout                               Revoke the key and remove local + agent config
-  rindler status                               Show login + MCP install status
-  rindler whoami                               Show the signed-in account
-  rindler mcp install|status|remove            Manage the MCP install for Claude Code + Codex
-  rindler version                              Print the version
+  rindler login [--paste] [--no-map] [--no-mcp]  Sign in with Clerk, mint a session-bound MCP key,
+                                                 and install the MCP into Claude Code + Codex
+  rindler map <url> [--mode fast|deep]           Map a site and follow the run to a verdict
+  rindler map status <job-id> [--once]           Follow a run you already started
+  rindler logout                                 Revoke the key and remove local + agent config
+  rindler status                                 Show login + MCP install status
+  rindler whoami                                 Show the signed-in account
+  rindler mcp install|status|remove              Manage the MCP install for Claude Code + Codex
+  rindler version                                Print the version
+
+Site mapping is requested at login by default; --no-map opts out. It is granted
+only if your workspace is entitled, and "rindler status" reports which you got.
 
 Environment:
   RINDLER_API_KEY         Use this key instead of logging in (CI / headless; never persisted)
