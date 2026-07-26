@@ -158,7 +158,6 @@ func runLogin(args []string) int {
 	noMap := fs.Bool("no-map", false, "do not request site-mapping capability")
 	deprecatedMap := fs.Bool("map", false, "deprecated: mapping is requested by default; this flag is a no-op")
 	noMCP := fs.Bool("no-mcp", false, "do not install the MCP into Claude Code / Codex after login")
-	noDevice := fs.Bool("no-device", false, "do not pair this machine as a device (it then cannot serve stored credentials to a session)")
 	authorizeBase := fs.String("authorize-base", envOr("RINDLER_AUTHORIZE_BASE", defaultAuthorizeBase), "dashboard origin serving the consent page")
 	apiBase := fs.String("api-base", envOr("RINDLER_API_BASE", defaultAPIBase), "Rindler API origin serving /api/cli/token")
 	timeout := fs.Duration("timeout", 5*time.Minute, "how long to wait for browser approval")
@@ -219,23 +218,15 @@ func runLogin(args []string) int {
 
 	fmt.Printf("\n✓ Logged in. Key …%s, expires %s%s.\n", tr.Last4, tr.ExpiresAt, mapNote(tr.MapperAccess))
 
-	// Enroll this machine as a paired device so it is visible and revocable from
-	// the dashboard and chat settings, exactly like the Auto-Login app.
-	// Non-fatal: a login that works is more valuable than a device row, and the
-	// user can pair later with `rindler device pair`. Saying so beats a silent
-	// skip, because an unpaired machine cannot serve credentials to a session
-	// and the reason would otherwise surface much later as a stalled login.
-	if !*noDevice {
-		pctx, pcancel := context.WithTimeout(context.Background(), 30*time.Second)
-		dev, derr := pairDevice(pctx, defaultHTTPClient(), cfg.APIBase, tr.AccessToken)
-		pcancel()
-		switch {
-		case derr != nil:
-			fmt.Printf("• This machine was not paired as a device (%v).\n", derr)
-			fmt.Println("  Retry with `rindler device pair`; credentials cannot be served to a session until then.")
-		default:
-			fmt.Printf("✓ Paired this machine as \"%s\" — manage or revoke it in Settings → Devices.\n", dev.DeviceName)
-		}
+
+	// The credential vault is OFF until the user turns it on. Pairing this
+	// machine is what makes it visible to the dashboard and chat and lets a
+	// session ask it for a secret, so it is an explicit act, never a side effect
+	// of signing in. Signing in should not quietly enroll a laptop as a
+	// credential custodian.
+	if !vaultEnabled() {
+		fmt.Println("\nCredential vault: off. Turn it on with `rindler vault enable`")
+		fmt.Println("to store logins on this machine and let your sessions use them.")
 	}
 	// Say so out loud when mapping was asked for and refused. The server denies it
 	// silently (an unentitled workspace just returns false), so without this the

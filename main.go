@@ -60,6 +60,8 @@ func run(args []string) int {
 		return runActions(args[1:])
 	case "creds", "credentials":
 		return runCreds(args[1:])
+	case "vault":
+		return runVault(args[1:])
 	case "device", "devices":
 		return runDevice(args[1:])
 	case "doctor":

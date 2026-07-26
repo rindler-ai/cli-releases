@@ -24,13 +24,14 @@ func runDevice(args []string) int {
 	}
 	switch args[0] {
 	case "pair":
-		return runDevicePair(args[1:])
+		// One switch, one vocabulary: pairing IS enabling the vault.
+		return runVaultEnable(args[1:])
 	case "status":
 		return runDeviceStatus()
 	case "list":
 		return runDeviceList(args[1:])
 	case "unpair":
-		return runDeviceUnpair()
+		return runVaultDisable()
 	case "serve", "relay":
 		return runDeviceServe(args[1:])
 	default:
@@ -185,8 +186,8 @@ func runDeviceServe(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if !deviceIsPaired() {
-		fmt.Fprintln(os.Stderr, "device serve: this machine is not paired; run `rindler device pair` first")
+	if !vaultEnabled() {
+		fmt.Fprintln(os.Stderr, "device serve:", vaultDisabledHint)
 		return 1
 	}
 	// Ctrl-C should stop serving promptly: this process is holding the door open

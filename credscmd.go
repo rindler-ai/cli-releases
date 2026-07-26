@@ -131,6 +131,14 @@ func runCredsAdd(args []string) int {
 		fmt.Fprintln(os.Stderr, "note:", warning)
 	}
 	fmt.Printf("✓ Stored %s for %s (encrypted on this device).\n", *username, site)
+	if !vaultEnabled() {
+		// Do not let this look finished when it is not. The credential is safe
+		// and encrypted, but nothing can use it until custody is switched on,
+		// and a silent no-op here would surface much later as a login that
+		// mysteriously reports no device holds the credential.
+		fmt.Println("  Note: the credential vault is OFF, so nothing can use this yet.")
+		fmt.Println("  Turn it on:  rindler vault enable")
+	}
 	if *otp != "" {
 		fmt.Printf("  second factor: %s\n", *otp)
 	}
