@@ -6,6 +6,7 @@
 // Usage:
 //
 //	rindler login [--paste] [--no-map] [--no-mcp]
+//	rindler run --site <domain> --action <name> [--input k=v]
 //	rindler map <url> [--mode fast|deep]
 //	rindler map status <job-id>
 //	rindler logout
@@ -48,6 +49,17 @@ func run(args []string) int {
 		return runWhoami()
 	case "map":
 		return runMap(args[1:])
+	case "run":
+		if len(args) >= 2 && args[1] == "status" {
+			return runRunStatus(args[2:])
+		}
+		return runRun(args[1:])
+	case "sites":
+		return runSites(args[1:])
+	case "actions":
+		return runActions(args[1:])
+	case "doctor":
+		return runDoctor(args[1:])
 	case "mcp":
 		return runMCP(args[1:])
 	// `rindler install mcp` reads as naturally as `rindler mcp install`, and
@@ -73,12 +85,17 @@ func usage(w *os.File) {
 Usage:
   rindler login [--paste] [--no-map] [--no-mcp]  Sign in with Clerk, mint a session-bound MCP key,
                                                  and install the MCP into Claude Code + Codex
+  rindler run --site <d> --action <a>            Run actions against a site and follow the job
+  rindler run status <job-id> [--once]          Follow a run you already started
+  rindler sites                                  List the sites you can act on
+  rindler actions <site>                         Show a site's actions and their inputs
   rindler map <url> [--mode fast|deep]           Map a site and follow the run to a verdict
   rindler map status <job-id> [--once]           Follow a run you already started
   rindler logout                                 Revoke the key and remove local + agent config
   rindler status                                 Show login + MCP install status
   rindler whoami                                 Show the signed-in account
   rindler mcp install|status|remove              Manage the MCP install for Claude Code + Codex
+  rindler doctor                                 Diagnose a broken setup and print the fix
   rindler version                                Print the version
 
 Site mapping is requested at login by default; --no-map opts out. It is granted

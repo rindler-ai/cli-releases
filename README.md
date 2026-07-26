@@ -30,12 +30,17 @@ against `SHA256SUMS.txt`, `chmod +x`, and put it on your `PATH`.
 | Command | What it does |
 |---|---|
 | `rindler login [--paste] [--no-map] [--no-mcp]` | Sign in, mint a session-bound key, install the MCP into Claude Code + Codex |
+| `rindler sites` | List the sites you can act on |
+| `rindler actions <site>` | Show a site's actions and the inputs each takes |
+| `rindler run --site <d> --action <a> [--input k=v]` | Run actions against a site and follow the job |
+| `rindler run status <job-id> [--once]` | Follow a run you already started |
 | `rindler map <url> [--mode fast\|deep]` | Map a site and follow the run to a verdict |
 | `rindler map status <job-id> [--once]` | Follow a run you already started |
 | `rindler logout` | Best-effort server-side revoke, then clear local + agent config |
 | `rindler status` | Login + MCP-install status |
 | `rindler whoami` | The signed-in account |
 | `rindler mcp install\|status\|remove` | Manage the MCP install only |
+| `rindler doctor` | Diagnose a broken setup and print the fix |
 | `rindler version` | Print the version |
 
 ### Login flows
@@ -100,3 +105,26 @@ The rindler CLI is licensed under the GNU Lesser General Public License v3.0
 (LGPL-3.0), matching [`rindler-ai/auto-login`](https://github.com/rindler-ai/auto-login).
 See [`LICENSE`](./LICENSE); the GPL-3.0 text it incorporates by reference is in
 [`COPYING.GPL-3`](./COPYING.GPL-3).
+
+## Doing something with a site
+
+Start from discovery — the names `run` needs are not guessable:
+
+```sh
+rindler sites                      # what you can act on
+rindler actions example.com        # what that site exposes, and each action's inputs
+rindler run --site example.com --action search_products --input query=shoes
+```
+
+`run` reports two different things, and keeps them apart on purpose:
+
+- **status** — did the attempt run (`complete`, `failed`, …)
+- **retrieval** — what the source actually held, and why it fell short
+
+A job can finish `complete` and still have retrieved nothing usable (a bot wall,
+an expired login, a selector that rotted). `run` exits **non-zero** in that case,
+because to a script that is not a success.
+
+Stuck? `rindler doctor` checks the credential, its expiry, mapping entitlement,
+the API origin, the MCP install, and whether the server still accepts your key —
+then prints the fix rather than the symptom.
