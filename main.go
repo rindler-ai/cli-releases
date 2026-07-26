@@ -58,6 +58,8 @@ func run(args []string) int {
 		return runSites(args[1:])
 	case "actions":
 		return runActions(args[1:])
+	case "creds", "credentials":
+		return runCreds(args[1:])
 	case "doctor":
 		return runDoctor(args[1:])
 	case "mcp":
@@ -91,6 +93,7 @@ Usage:
   rindler status                                 Show login + MCP install status
   rindler whoami                                 Show the signed-in account
   rindler mcp install|status|remove              Manage the MCP install for Claude Code + Codex
+  rindler creds add|list|show|rm                  Credentials for a site, encrypted on this device
   rindler doctor                                 Diagnose a broken setup and print the fix
   rindler version                                Print the version
 

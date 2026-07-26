@@ -36,6 +36,12 @@ type credentialStore interface {
 	delKey() error
 	// location is a human description for status output.
 	location() string
+	// Named entries hold secrets other than the MCP key -- today the credential
+	// vault's master key. Kept on the same interface so the vault inherits the
+	// keyring-then-0600-file degradation instead of inventing a second one.
+	setNamed(name, value string) error
+	getNamed(name string) (string, error) // "" + nil when absent
+	delNamed(name string) error
 }
 
 // newCredentialStore selects the OS keyring when available, else the 0600 file
@@ -73,6 +79,22 @@ func (s *keyringCredStore) delKey() error {
 	return err
 }
 func (s *keyringCredStore) location() string { return "OS keyring (service rindler-cli)" }
+
+func (s *keyringCredStore) setNamed(name, value string) error { return s.kb.set(name, value) }
+func (s *keyringCredStore) getNamed(name string) (string, error) {
+	v, err := s.kb.get(name)
+	if errors.Is(err, errNoEntry) {
+		return "", nil
+	}
+	return v, err
+}
+func (s *keyringCredStore) delNamed(name string) error {
+	err := s.kb.del(name)
+	if errors.Is(err, errNoEntry) {
+		return nil
+	}
+	return err
+}
 
 // fileCredStore persists the key in a 0600 JSON file (dir 0700).
 type fileCredStore struct{ path string }
@@ -112,6 +134,43 @@ func (s *fileCredStore) delKey() error {
 	return nil
 }
 func (s *fileCredStore) location() string { return s.path + " (0600 file)" }
+
+// Named entries live in sibling 0600 files rather than inside credentials.json,
+// so `rindler logout` deleting the key file cannot take the vault key with it --
+// losing that key would render every stored credential permanently unreadable.
+func (s *fileCredStore) namedPath(name string) string {
+	return filepath.Join(filepath.Dir(s.path), "named-"+name+".json")
+}
+func (s *fileCredStore) setNamed(name, value string) error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return err
+	}
+	b, err := json.Marshal(fileCred{Key: value})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.namedPath(name), b, 0o600)
+}
+func (s *fileCredStore) getNamed(name string) (string, error) {
+	b, err := os.ReadFile(s.namedPath(name))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	var fc fileCred
+	if err := json.Unmarshal(b, &fc); err != nil {
+		return "", err
+	}
+	return fc.Key, nil
+}
+func (s *fileCredStore) delNamed(name string) error {
+	if err := os.Remove(s.namedPath(name)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
 
 // resolveActiveKey returns the key the CLI should use, honoring the highest-
 // precedence RINDLER_API_KEY env override (CI/headless lane, never persisted)
