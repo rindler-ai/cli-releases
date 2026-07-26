@@ -1,5 +1,7 @@
 # `rindler` CLI
 
+[![License: LGPL v3](https://img.shields.io/badge/License-LGPL_v3-blue.svg)](./LICENSE)
+
 Sign in to [Rindler](https://rindler.ai) and install the Rindler MCP into your
 coding agents.
 
@@ -89,3 +91,10 @@ release needs **no credential anywhere**:
   required a long-lived personal access token.
 - This repo is public, so `https://rindler.ai/dl` proxies the release assets
   anonymously rather than holding a GitHub token at the public edge.
+
+## License
+
+The rindler CLI is licensed under the GNU Lesser General Public License v3.0
+(LGPL-3.0), matching [`rindler-ai/auto-login`](https://github.com/rindler-ai/auto-login).
+See [`LICENSE`](./LICENSE); the GPL-3.0 text it incorporates by reference is in
+[`COPYING.GPL-3`](./COPYING.GPL-3).
