@@ -219,7 +219,7 @@ func runLogin(args []string) int {
 	fmt.Printf("\n✓ Logged in. Key …%s, expires %s%s.\n", tr.Last4, tr.ExpiresAt, mapNote(tr.MapperAccess))
 
 	// The credential vault is OFF until the user turns it on. Pairing this
-	// machine is what makes it visible to the dashboard and chat and lets a
+	// machine is what makes it visible in the dashboard and lets a
 	// session ask it for a secret, so it is an explicit act, never a side effect
 	// of signing in. Signing in should not quietly enroll a laptop as a
 	// credential custodian.

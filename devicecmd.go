@@ -67,7 +67,6 @@ func runDevicePair(args []string) int {
 	}
 	fmt.Printf("✓ Paired this machine as %q (device %s).\n", d.DeviceName, d.DeviceID)
 	fmt.Println("  Manage or revoke it in the dashboard under Auto Login → Devices,")
-	fmt.Println("  or in chat settings under Devices.")
 	fmt.Println("\nRun `rindler device serve` to let a session use your stored credentials.")
 	return 0
 }

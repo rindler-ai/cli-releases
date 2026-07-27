@@ -18,7 +18,7 @@ import (
 )
 
 // Device enrollment: the CLI pairs as a custody device, exactly as the Auto-Login
-// app does, so it shows up on the dashboard and in chat settings and can be
+// app does, so it shows up in the dashboard under Auto Login and can be
 // revoked from either.
 //
 // The point is not cosmetic. A machine holding a credential vault must be

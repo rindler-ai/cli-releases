@@ -11,8 +11,8 @@ import (
 // `rindler vault` — the on/off switch for credential custody on this machine.
 //
 // OFF IS THE DEFAULT, and off is a real state, not a label: the machine is not
-// paired, so it does not appear under Devices in the dashboard or in chat
-// settings, holds no device token, and cannot be asked for a secret by any
+// paired, so it does not appear under Devices in the dashboard, holds no
+// device token, and cannot be asked for a secret by any
 // session. Signing in does not turn it on. Storing a credential does not turn it
 // on either -- `creds add` writes to a local encrypted file that stays inert
 // until someone deliberately enables the vault.
@@ -54,7 +54,7 @@ func runVaultStatus() int {
 	if !vaultEnabled() {
 		fmt.Println("Credential vault: OFF")
 		fmt.Println("  This machine is not paired, so it does not appear under Devices in the")
-		fmt.Println("  dashboard or chat, and no session can ask it for a login.")
+		fmt.Println("  dashboard, and no session can ask it for a login.")
 		if n := storedCredentialCount(); n > 0 {
 			// Say this plainly: someone who added credentials expects them to work.
 			fmt.Printf("  %d credential(s) are stored locally and encrypted, but INERT until you\n", n)
@@ -67,7 +67,7 @@ func runVaultStatus() int {
 	fmt.Println("Credential vault: ON")
 	fmt.Printf("  paired as %q (device %s)\n", d.DeviceName, d.DeviceID)
 	fmt.Printf("  %d credential(s) stored, encrypted on this device\n", storedCredentialCount())
-	fmt.Println("  manage or revoke it under Devices in the dashboard or chat settings")
+	fmt.Println("  manage or revoke it under Auto Login \u2192 Devices in the dashboard")
 	fmt.Println("\nServe requests:  rindler device serve")
 	fmt.Println("Turn it off:     rindler vault disable")
 	return 0
@@ -96,7 +96,7 @@ func runVaultEnable(args []string) int {
 		return 1
 	}
 	fmt.Printf("✓ Credential vault ON. Paired as %q.\n", d.DeviceName)
-	fmt.Println("  It now appears under Devices in the dashboard and in chat settings,")
+	fmt.Println("  It now appears under Auto Login \u2192 Devices in the dashboard,")
 	fmt.Println("  where you can revoke it at any time.")
 	fmt.Println("\n  Secrets stay on this machine: each request is verified against the")
 	fmt.Println("  server's signing key and answered from your local encrypted vault,")
@@ -118,7 +118,7 @@ func runVaultDisable() int {
 		return 1
 	}
 	fmt.Println("✓ Credential vault OFF. This machine is unpaired and no longer")
-	fmt.Println("  reachable from the dashboard or chat.")
+	fmt.Println("  reachable from the dashboard.")
 	// Deleting the vault is a separate, destructive act. Turning custody off
 	// should not throw away credentials the user may want back tomorrow.
 	if n := storedCredentialCount(); n > 0 {
