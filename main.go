@@ -60,6 +60,8 @@ func run(args []string) int {
 		return runActions(args[1:])
 	case "creds", "credentials":
 		return runCreds(args[1:])
+	case "usage":
+		return runUsage(args[1:])
 	case "vault":
 		return runVault(args[1:])
 	case "device", "devices":
@@ -98,6 +100,7 @@ Usage:
   rindler whoami                                 Show the signed-in account
   rindler mcp install|status|remove              Manage the MCP install for Claude Code + Codex
   rindler creds add|list|show|rm                  Credentials for a site, encrypted on this device
+  rindler usage [--workspace] [--json]           Your credits and usage, the same numbers the dashboard shows
   rindler vault status|enable|disable            Turn credential custody on this machine on or off
   rindler device status|list|serve               This machine as a paired device, and the relay
   rindler doctor                                 Diagnose a broken setup and print the fix
