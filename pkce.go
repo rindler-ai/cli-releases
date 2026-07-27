@@ -7,7 +7,7 @@ import (
 )
 
 // PKCE (RFC 7636) + CSRF state generation for the CLI login flow. The
-// server side (the server's PKCE verification) recomputes
+// server recomputes
 // base64url(sha256(verifier)) and constant-time-compares it to the challenge, so
 // these MUST use RawURLEncoding + SHA-256 to interoperate.
 

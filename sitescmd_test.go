@@ -35,7 +35,7 @@ func TestGetJSONSendsBearerAndDecodes(t *testing.T) {
 }
 
 // Pins the envelope shapes against the live contract, in both directions: the
-// LIST is wrapped, the DETAIL is not (the server).
+// LIST is wrapped, the DETAIL is not.
 // Getting either backwards decodes to an empty struct with no error.
 func TestConfigEnvelopeShapes(t *testing.T) {
 	var list configsResponse

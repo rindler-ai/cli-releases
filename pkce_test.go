@@ -27,7 +27,7 @@ func TestNewPKCEShape(t *testing.T) {
 }
 
 func TestChallengeMatchesServerContract(t *testing.T) {
-	// Mirror the server's PKCE verification: challenge == base64url(sha256(verifier)).
+	// Mirror the server's verification: challenge == base64url(sha256(verifier)).
 	p, err := newPKCE()
 	if err != nil {
 		t.Fatal(err)

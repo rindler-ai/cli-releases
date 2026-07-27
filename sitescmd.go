@@ -10,7 +10,7 @@
 //   GET <api>/v1/runtime/configs           -> {configs:[{domain, version, authed, action_count}]}
 //   GET <api>/v1/runtime/configs/{domain}  -> {domain, version, screens:[{name, actions:[…]}]}
 //
-// The action surface is served REDACTED (the server): action_name
+// The action surface is served REDACTED: action_name
 // is what `run --action` wants, `method` is read vs act, and `params` are the
 // bindable `--input` keys.
 
@@ -32,8 +32,7 @@ import (
 )
 
 // configsResponse is the REAL envelope: GET /v1/runtime/configs returns
-// {"configs":[...]}, not a bare array (the server
-// Decoding it as an array
+// {"configs":[...]}, not a bare array. Decoding it as an array
 // silently yielded zero sites against the live server while the unit tests --
 // written against the assumed shape -- stayed green. Caught by a live run.
 type configsResponse struct {

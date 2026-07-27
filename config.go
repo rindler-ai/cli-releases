@@ -9,8 +9,8 @@ import (
 
 // On-disk config for the rindler CLI. Only NON-SECRET metadata lives here
 // (~/.config/rindler/config.json); the rindler_live_ key itself lives in the OS
-// keyring (see keyring.go), never in this file. Directory convention matches
-// the Rindler daemon (~/.config/rindler/), overridable via $RINDLER_CONFIG_DIR / XDG.
+// keyring (see keyring.go), never in this file. The directory is
+// ~/.config/rindler/, overridable via $RINDLER_CONFIG_DIR / XDG.
 
 const (
 	configDirName  = "rindler"

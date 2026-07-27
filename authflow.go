@@ -14,7 +14,6 @@ import (
 )
 
 // Client-side pieces of the OAuth Authorization Code + PKCE login flow.
-// The server side is the Rindler API.
 
 const (
 	cliClientID = "rindler-cli"
