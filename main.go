@@ -98,8 +98,14 @@ Usage:
   rindler whoami                                 Show the signed-in account
   rindler mcp install|status|remove              Manage the MCP install for Claude Code + Codex
   rindler creds add|list|show|rm                  Credentials for a site, encrypted on this device
+  rindler vault status|enable|disable            Turn credential custody on this machine on or off
+  rindler device status|list|serve               This machine as a paired device, and the relay
   rindler doctor                                 Diagnose a broken setup and print the fix
   rindler version                                Print the version
+
+The credential vault is OFF until you run "rindler vault enable": until then this
+machine is not paired, is not listed on your dashboard, and no session can ask it
+for a login.
 
 Site mapping is requested at login by default; --no-map opts out. It is granted
 only if your workspace is entitled, and "rindler status" reports which you got.

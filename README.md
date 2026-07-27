@@ -51,7 +51,7 @@ against `SHA256SUMS.txt`, `chmod +x`, and put it on your `PATH`.
   on any device; you paste back the `code#state` it shows. The `state` is
   verified (CSRF).
 
-`--map` additionally requests site-mapping capability, granted only if your
+`--no-map` additionally requests site-mapping capability, granted only if your
 workspace is entitled to it.
 
 ### Two credential lanes
@@ -61,6 +61,35 @@ workspace is entitled to it.
   with a warning when no keyring is present.
 - **Headless / CI:** set `RINDLER_API_KEY=rindler_live_…` (a long-lived dashboard
   key). It takes precedence over the stored key and is never written to disk.
+
+
+### Credential vault
+
+Custody is **off** until you turn it on. Off is a real state: the machine is
+unpaired, does not appear under Devices on your dashboard, and no session can
+ask it for a login. Signing in does not turn it on.
+
+```sh
+rindler vault status      # what this machine is, and what is stored but inert
+rindler vault enable      # pair it and start acting as a custodian
+rindler vault disable     # unpair it; stored credentials stay on disk
+```
+
+### Devices and the relay
+
+```sh
+rindler device status     # this machine, and whether the relay can run
+rindler device list       # every device on the account, CLI and app
+rindler device serve      # hold the socket and answer signed credential requests
+```
+
+The relay verifies every request against the server's signing key **before**
+opening the vault, refuses one-time-code kinds (a vault holds durable
+credentials, never a live code), and seals each secret to the login worker so
+Rindler's server relays a ciphertext it cannot read.
+
+The CLI is a **dashboard** tool: it signs in through app.rindler.ai, and the
+devices and keys it creates appear there, not in chat.
 
 ## What gets written
 

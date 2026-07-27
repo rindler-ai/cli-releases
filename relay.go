@@ -44,13 +44,13 @@ const (
 func runRelay(ctx context.Context, verbose bool) error {
 	d, err := loadDeviceIdentity()
 	if err != nil || d.DeviceToken == "" {
-		return errors.New("this machine is not paired; run `rindler login` first")
+		return errors.New("this machine is not paired; run `rindler vault enable` first")
 	}
 	if len(d.ServerPubkey) != ed25519.PublicKeySize {
 		// Fail closed. Without the server's key we cannot tell a real request
 		// from an attacker's, and serving credentials on unverifiable pings is
 		// precisely the failure this whole design exists to prevent.
-		return errors.New("this device paired against a lane with no relay signing key; re-run `rindler login` to re-pair before serving credentials")
+		return errors.New("this device paired against a lane with no relay signing key; run `rindler vault disable` then `rindler vault enable` to re-pair before serving credentials")
 	}
 
 	backoff := relayReconnectMin

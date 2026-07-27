@@ -40,37 +40,6 @@ func runDevice(args []string) int {
 	}
 }
 
-func runDevicePair(args []string) int {
-	fs := flag.NewFlagSet("device pair", flag.ContinueOnError)
-	apiBaseFlag := fs.String("api-base", "", "Rindler API origin")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-	key, apiBase, code := resolveKeyAndBase(*apiBaseFlag, "device pair")
-	if code != 0 {
-		return code
-	}
-	if deviceIsPaired() {
-		// Re-pairing would mint a second row for one machine, so say what is
-		// already true and point at the way out rather than silently duplicating.
-		d, _ := loadDeviceIdentity()
-		fmt.Printf("This machine is already paired as %q (device %s).\n", d.DeviceName, d.DeviceID)
-		fmt.Println("Run `rindler device unpair` first if you want to re-pair it.")
-		return 0
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	d, err := pairDevice(ctx, defaultHTTPClient(), apiBase, key)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "device pair:", err)
-		return 1
-	}
-	fmt.Printf("✓ Paired this machine as %q (device %s).\n", d.DeviceName, d.DeviceID)
-	fmt.Println("  Manage or revoke it in the dashboard under Auto Login → Devices,")
-	fmt.Println("\nRun `rindler device serve` to let a session use your stored credentials.")
-	return 0
-}
-
 func runDeviceStatus() int {
 	d, err := loadDeviceIdentity()
 	if err != nil || d.DeviceID == "" {
@@ -161,21 +130,6 @@ func runDeviceList(args []string) int {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", name, kind, d.Platform, d.Status, d.LastSeenAt)
 	}
 	w.Flush()
-	return 0
-}
-
-func runDeviceUnpair() int {
-	if !deviceIsPaired() {
-		fmt.Println("This machine is not paired.")
-		return 0
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if err := unpairDevice(ctx, defaultHTTPClient()); err != nil {
-		fmt.Fprintln(os.Stderr, "device unpair:", err)
-		return 1
-	}
-	fmt.Println("✓ Unpaired this machine. Stored credentials stay in the local vault.")
 	return 0
 }
 
