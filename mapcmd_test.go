@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -65,8 +66,39 @@ func TestMapAuthErrorIsActionable(t *testing.T) {
 			t.Errorf("403 message %q should mention %q", got, want)
 		}
 	}
-	if got := mapAuthError(http.StatusServiceUnavailable, "").Error(); !strings.Contains(got, "not available") {
-		t.Errorf("503 message %q should say mapping is unavailable", got)
+	// 503 covers BOTH "no mapper on this deployment" and a transient fault
+	// ("could not read mapping state"). With no body to go on, the message must
+	// hedge rather than assert the first, which is what it used to do.
+	got503 := mapAuthError(http.StatusServiceUnavailable, "").Error()
+	if !strings.Contains(got503, "not be available") || !strings.Contains(got503, "briefly down") {
+		t.Errorf("503 with no body should hedge between the two causes, got %q", got503)
+	}
+	// With a body, the server's own words win: telling someone their deployment
+	// cannot map when the real answer was "could not read mapping state" sends
+	// them to fix infrastructure that is fine.
+	transient := mapAuthError(http.StatusServiceUnavailable, `{"error":"could not read mapping state"}`).Error()
+	if !strings.Contains(transient, "could not read mapping state") {
+		t.Errorf("the server's own 503 reason was discarded: %q", transient)
+	}
+}
+
+// 409 is two different things told apart only by the body: a race the next poll
+// resolves, and a real refusal. Aborting on the first turned a momentary race
+// into a failed map for a run that was still going.
+func TestMapConflictSeparatesARaceFromARefusal(t *testing.T) {
+	var retryable *mapRetryableError
+
+	race := mapAuthError(http.StatusConflict, `{"error":"mapping status changed; retry"}`)
+	if !errors.As(race, &retryable) {
+		t.Errorf("a retry-me came back as %T; the poll will abort a live run", race)
+	}
+
+	refusal := mapAuthError(http.StatusConflict, `{"error":"another mapping already owns this domain"}`)
+	if errors.As(refusal, &retryable) {
+		t.Error("a real refusal was classified as retryable; the poll would spin until timeout")
+	}
+	if !strings.Contains(refusal.Error(), "already owns this domain") {
+		t.Errorf("the refusal lost its reason: %q", refusal)
 	}
 }
 
@@ -107,8 +139,16 @@ func TestStartMapSurfacesForbidden(t *testing.T) {
 	defer srv.Close()
 
 	_, err := startMap(context.Background(), srv.Client(), srv.URL, "k", "https://example.com", "fast")
-	if err == nil || !strings.Contains(err.Error(), "cannot map") {
-		t.Fatalf("want the actionable mapper-access error, got %v", err)
+	// The server's own diagnosis comes first, then our fix. Both must be there:
+	// the diagnosis says what is wrong, the fix says what to do about it.
+	if err == nil {
+		t.Fatal("a 403 must be an error")
+	}
+	if !strings.Contains(err.Error(), "requires an admin key") {
+		t.Errorf("the server's diagnosis was discarded: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rindler status") {
+		t.Errorf("the actionable fix was dropped: %v", err)
 	}
 }
 

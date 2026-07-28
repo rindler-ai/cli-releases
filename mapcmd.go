@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -202,16 +203,52 @@ func normalizeMapTarget(raw string) (string, error) {
 
 // mapAuthError turns the server's authorization refusals into the actionable
 // sentence each one actually implies, instead of a bare status code.
+// mapRetryableError is a "not now" -- the run is fine and the next poll will
+// get an answer. Distinct from a refusal because retrying one works and
+// retrying the other just repeats the same no.
+type mapRetryableError struct{ reason string }
+
+func (e *mapRetryableError) Error() string { return e.reason }
+
 func mapAuthError(code int, body string) error {
+	se := decodeServerError(body)
+
+	// 409 is TWO different things, told apart only by the body: "mapping status
+	// changed; retry" is a race the next poll resolves, while "another mapping
+	// already owns this domain" is a real refusal. Aborting on the first turned
+	// a momentary race into a failed map for a run that was still going.
+	if code == http.StatusConflict {
+		if strings.Contains(strings.ToLower(se.Error), "retry") {
+			return &mapRetryableError{reason: firstNonEmpty(se.Error, "mapping status changed; retry")}
+		}
+		return fmt.Errorf("%s", firstNonEmpty(se.Error, "another mapping already owns this domain"))
+	}
+
+	fix := ""
 	switch code {
 	case http.StatusUnauthorized:
-		return fmt.Errorf("not logged in or the key expired — run `rindler login`")
-	case http.StatusForbidden:
-		return fmt.Errorf("this key cannot map. Run `rindler status`: if it says (runtime) " +
-			"rather than (runtime + mapping), log in again — and if mapping is still absent, " +
-			"your workspace is not entitled to it")
+		fix = "run `rindler login`"
 	case http.StatusServiceUnavailable:
-		return fmt.Errorf("mapping is not available on this deployment")
+		// Only reached when the body is empty. Hedged deliberately: this code
+		// covers both a deployment with no mapper and a momentary fault, and the
+		// old text asserted the first.
+		fix = "the mapping service did not answer; it may not be available on this deployment, or may be briefly down"
+	case http.StatusForbidden:
+		fix = "run `rindler status`: if it says (runtime) rather than (runtime + mapping), " +
+			"log in again — and if mapping is still absent, your workspace is not entitled to it"
+	}
+
+	// 503 covers BOTH "this deployment has no mapper" and transient faults like
+	// "could not read mapping state". Collapsing them into the first told people
+	// their deployment could not map when the server had merely hiccuped, so the
+	// server's own sentence is the one that gets printed.
+	switch {
+	case se.Error != "" && fix != "":
+		return fmt.Errorf("%s — %s", se.Error, fix)
+	case se.Error != "":
+		return fmt.Errorf("%s (HTTP %d)", se.Error, code)
+	case fix != "":
+		return fmt.Errorf("map failed (HTTP %d) — %s", code, fix)
 	}
 	return fmt.Errorf("map failed (HTTP %d): %s", code, strings.TrimSpace(body))
 }
@@ -378,6 +415,18 @@ func followMap(ctx context.Context, httpc *http.Client, apiBase, key, jobID stri
 				fmt.Fprintf(os.Stderr, "\nstopped following after the timeout; the run may still be going.\n"+
 					"Check it with: rindler map status %s\n", jobID)
 				return 1
+			}
+			// A retry-me is the server asking us to look again, not a verdict.
+			var retryable *mapRetryableError
+			if errors.As(err, &retryable) {
+				select {
+				case <-ctx.Done():
+					fmt.Fprintf(os.Stderr, "\nstopped following after the timeout; the run may still be going.\n"+
+						"Check it with: rindler map status %s\n", jobID)
+					return 1
+				case <-time.After(mapPollInterval):
+				}
+				continue
 			}
 			fmt.Fprintln(os.Stderr, "map: status check failed:", err)
 			return 1
