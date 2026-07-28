@@ -16,7 +16,7 @@ import (
 // "✓ Mapped" and exited 0 for a mapping that published nothing — and the
 // user's next run against that site failed with "unsupported site".
 //
-// These bodies are transcribed from api/map.go's response builder, not
+// These bodies are transcribed from the server's response builder, not
 // invented. The previous fixture WAS invented, which is exactly why the tests
 // passed while the command was wrong.
 

@@ -135,7 +135,7 @@ func (s mapStatusResponse) rejectionReason() string {
 
 // mapTerminal reports whether a status string ends the run, and whether it won.
 // mapTerminal decides when to stop polling. Its terminal set MIRRORS the
-// server's mappingStatusTerminal (api/tracked_sites.go), and must keep
+// server's own terminal-status predicate, and must keep
 // mirroring it, because a status the server considers finished but this
 // function does not is a poll that never ends: the job is already over, so the
 // status will never change again, and we sit there until --timeout and then

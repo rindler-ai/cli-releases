@@ -8,8 +8,9 @@ import "testing"
 // never change again, and the CLI waits out its whole --timeout before
 // reporting a timeout that never happened.
 //
-// serverTerminal is transcribed from api/tracked_sites.go mappingStatusTerminal,
-// which is the authoritative set. Keep it in sync deliberately, not by memory.
+// serverTerminal is transcribed from the server's own terminal-status
+// predicate, which is the authoritative set. Keep it in sync deliberately,
+// not by memory.
 var serverTerminal = []string{
 	"complete", "error", "failed", "expired", "cancelled", "needs_escalation",
 }
