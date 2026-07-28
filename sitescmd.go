@@ -77,7 +77,10 @@ type siteDetail struct {
 }
 
 // getJSON is the shared authenticated GET for the read-only discovery verbs.
-func getJSON(ctx context.Context, httpc *http.Client, apiBase, key, path string, out any) error {
+// getJSON reads a JSON endpoint. verb names the COMMAND for error messages:
+// it used to hardcode `run`'s mapper, so a failed `rindler sites` announced
+// "run failed" and offered run's advice about a site the user never named.
+func getJSON(ctx context.Context, httpc *http.Client, apiBase, key, verb, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+path, nil)
 	if err != nil {
 		return err
@@ -90,7 +93,7 @@ func getJSON(ctx context.Context, httpc *http.Client, apiBase, key, path string,
 	defer res.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(res.Body, 8<<20))
 	if res.StatusCode != http.StatusOK {
-		return runAuthError(res.StatusCode, string(body))
+		return verbError(verb, res.StatusCode, string(body))
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("unreadable response from %s: %s", path, strings.TrimSpace(string(body)))
@@ -113,7 +116,7 @@ func runSites(args []string) int {
 	defer cancel()
 
 	var resp configsResponse
-	if err := getJSON(ctx, defaultHTTPClient(), apiBase, key, "/v1/runtime/configs", &resp); err != nil {
+	if err := getJSON(ctx, defaultHTTPClient(), apiBase, key, "sites", "/v1/runtime/configs", &resp); err != nil {
 		fmt.Fprintln(os.Stderr, "sites:", err)
 		return 1
 	}
@@ -176,7 +179,7 @@ func runActions(args []string) int {
 	defer cancel()
 
 	var detail siteDetail
-	if err := getJSON(ctx, defaultHTTPClient(), apiBase, key,
+	if err := getJSON(ctx, defaultHTTPClient(), apiBase, key, "actions",
 		"/v1/runtime/configs/"+url.PathEscape(host), &detail); err != nil {
 		fmt.Fprintln(os.Stderr, "actions:", err)
 		return 1

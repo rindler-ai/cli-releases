@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -165,9 +166,16 @@ func runLogout(args []string) int {
 		dctx, dcancel := context.WithTimeout(context.Background(), 15*time.Second)
 		err := unpairDevice(dctx, defaultHTTPClient())
 		dcancel()
-		if err != nil {
+		var revokeErr *serverRevokeError
+		switch {
+		case errors.As(err, &revokeErr):
+			// The key is gone either way, so custody really is off; be precise
+			// about the half that did not happen rather than claiming both did.
+			fmt.Println("✓ Erased this machine's device key.")
+			fmt.Fprintf(os.Stderr, "warning: %v — remove it from the Devices list on your dashboard\n", err)
+		case err != nil:
 			fmt.Fprintln(os.Stderr, "warning: could not fully unpair this device:", err)
-		} else {
+		default:
 			fmt.Println("✓ Unpaired this machine.")
 		}
 	}

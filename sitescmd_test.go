@@ -22,7 +22,7 @@ func TestGetJSONSendsBearerAndDecodes(t *testing.T) {
 	defer srv.Close()
 
 	var out configsResponse
-	if err := getJSON(context.Background(), srv.Client(), srv.URL, "k", "/v1/runtime/configs", &out); err != nil {
+	if err := getJSON(context.Background(), srv.Client(), srv.URL, "k", "sites", "/v1/runtime/configs", &out); err != nil {
 		t.Fatalf("getJSON errored: %v", err)
 	}
 	if auth != "Bearer k" || path != "/v1/runtime/configs" {
@@ -58,7 +58,7 @@ func TestGetJSONSurfacesHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 	var out []siteSummary
-	err := getJSON(context.Background(), srv.Client(), srv.URL, "k", "/v1/runtime/configs", &out)
+	err := getJSON(context.Background(), srv.Client(), srv.URL, "k", "sites", "/v1/runtime/configs", &out)
 	if err == nil || !strings.Contains(err.Error(), "rindler login") {
 		t.Fatalf("a 401 should point at login, got %v", err)
 	}

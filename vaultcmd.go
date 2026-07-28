@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -113,12 +114,25 @@ func runVaultDisable() int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := unpairDevice(ctx, defaultHTTPClient()); err != nil {
+	// Two different failures. A serverRevokeError means the local identity IS
+	// erased and only the dashboard row survived, so custody really is off here
+	// and the user has one manual step left. Anything else means the erase
+	// itself did not finish, which is a hard failure.
+	err := unpairDevice(ctx, defaultHTTPClient())
+	var revokeErr *serverRevokeError
+	switch {
+	case errors.As(err, &revokeErr):
+		fmt.Println("✓ Credential vault OFF. This machine's device key is erased, so no")
+		fmt.Println("  session can get a credential from it.")
+		fmt.Fprintf(os.Stderr, "\n⚠ Could not tell the server: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  Remove it from the Devices list on your dashboard.")
+	case err != nil:
 		fmt.Fprintln(os.Stderr, "vault disable:", err)
 		return 1
+	default:
+		fmt.Println("✓ Credential vault OFF. This machine is unpaired and no longer")
+		fmt.Println("  reachable from the dashboard.")
 	}
-	fmt.Println("✓ Credential vault OFF. This machine is unpaired and no longer")
-	fmt.Println("  reachable from the dashboard.")
 	// Deleting the vault is a separate, destructive act. Turning custody off
 	// should not throw away credentials the user may want back tomorrow.
 	if n := storedCredentialCount(); n > 0 {

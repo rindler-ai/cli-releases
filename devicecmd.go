@@ -90,7 +90,7 @@ func runDeviceList(args []string) int {
 	defer res.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(res.Body, 8<<20))
 	if res.StatusCode != http.StatusOK {
-		fmt.Fprintln(os.Stderr, "device list:", runAuthError(res.StatusCode, string(body)))
+		fmt.Fprintln(os.Stderr, "device list:", verbError("device list", res.StatusCode, string(body)))
 		return 1
 	}
 	if *jsonOut {

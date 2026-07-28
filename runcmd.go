@@ -250,19 +250,60 @@ func resolveAPIBase(flagValue string, cfg cliConfig) string {
 // runAuthError names what each refusal means. Run accepts any key, so a 403 here
 // is about the SITE, not the key — pointing the user at `rindler login` would
 // send them to fix something that is not broken.
+// serverError is the one error shape this API uses: {"error", "class"}, from
+// writeError/writeErrorClass.
+type serverError struct {
+	Error string `json:"error"`
+	Class string `json:"class,omitempty"`
+}
+
+// decodeServerError pulls the server's own words out of a failure body. The
+// body is the most specific thing available and was being thrown away on every
+// classified status.
+func decodeServerError(body string) serverError {
+	var se serverError
+	_ = json.Unmarshal([]byte(body), &se)
+	se.Error = strings.TrimSpace(se.Error)
+	return se
+}
+
+// runAuthError turns a failed response into something a reader can act on.
+//
+// The server's message wins when it sent one. These canned strings exist to
+// add the FIX -- which command to run next -- to a status code that on its own
+// says only "no". They were replacing the server's specific explanation with a
+// generic guess, so a 403 for "this action needs a saved login" and a 403 for
+// "the site is not in your catalog" read identically, and both blamed the
+// catalog.
+//
+// verb is named so the message does not say "run failed" when it was `sites`
+// or `actions` that failed; those share this mapper.
 func runAuthError(code int, body string) error {
+	return verbError("run", code, body)
+}
+
+func verbError(verb string, code int, body string) error {
+	se := decodeServerError(body)
+	fix := ""
 	switch code {
 	case http.StatusUnauthorized:
-		return fmt.Errorf("not logged in or the key expired — run `rindler login`")
+		fix = "run `rindler login`"
 	case http.StatusForbidden:
-		return fmt.Errorf("not allowed to run against this site — it is not in your catalog " +
-			"and you do not own a config for it (run accepts any key, so this is about the site, not your login)")
+		fix = "this is about the site, not your login: it is not in your catalog and you do not own a config for it"
 	case http.StatusNotFound:
-		return fmt.Errorf("no config for that site — map it first: rindler map <url>")
+		fix = "map it first: rindler map <url>"
 	case http.StatusTooManyRequests:
-		return fmt.Errorf("rate limited or out of quota; try again shortly")
+		fix = "rate limited or out of quota; try again shortly"
 	}
-	return fmt.Errorf("run failed (HTTP %d): %s", code, strings.TrimSpace(body))
+	switch {
+	case se.Error != "" && fix != "":
+		return fmt.Errorf("%s — %s", se.Error, fix)
+	case se.Error != "":
+		return fmt.Errorf("%s (HTTP %d)", se.Error, code)
+	case fix != "":
+		return fmt.Errorf("%s failed (HTTP %d) — %s", verb, code, fix)
+	}
+	return fmt.Errorf("%s failed (HTTP %d): %s", verb, code, strings.TrimSpace(body))
 }
 
 func startRun(
@@ -381,9 +422,16 @@ func followRun(ctx context.Context, httpc *http.Client, apiBase, key, jobID stri
 // printRunResult renders the terminal envelope for a human, keeping the run
 // status and the semantic retrieval outcome visibly distinct.
 func printRunResult(w io.Writer, env runJobEnvelope) {
-	if _, ok := runTerminal(env.Status); ok {
+	// done BEFORE ok. runTerminal returns (false,false) for a job still in
+	// flight, so keying the marker on ok alone stamped a ✗ on every "queued"
+	// and "running" -- a job that is merely not finished yet read as failed.
+	done, ok := runTerminal(env.Status)
+	switch {
+	case !done:
+		fmt.Fprintf(w, "\n· %s", env.Status)
+	case ok:
 		fmt.Fprintf(w, "\n✓ %s", env.Status)
-	} else {
+	default:
 		fmt.Fprintf(w, "\n✗ %s", env.Status)
 	}
 	if env.Usage.Steps > 0 {
