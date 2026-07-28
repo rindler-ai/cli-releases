@@ -84,6 +84,97 @@ func envelopeLooksReal(u usageResponse) bool {
 	return u.WindowDays > 0 && u.EndAt != ""
 }
 
+// creditsResponse mirrors the entitlements self endpoint's credit fields.
+//
+// `known` is the load-bearing one and the reason Credit is a POINTER: the
+// server reports the pool verdict and the BALANCE separately, on purpose, so a
+// failed balance read cannot flip who gets debited. That means "we could not
+// read your balance" and "your balance is zero" arrive as different things and
+// must stay different here -- printing a confident 0 remaining for a failed
+// read is the same class of lie as the zeroed report this command already had.
+type creditsResponse struct {
+	Pool   string `json:"pool"`
+	Credit *struct {
+		Known     bool  `json:"known"`
+		Remaining int64 `json:"remaining"`
+		Allotment int64 `json:"allotment"`
+		Used      int64 `json:"used"`
+	} `json:"workspace_credit,omitempty"`
+}
+
+// fetchCredits reads the balance. Best-effort by design: usage numbers are
+// worth printing on their own, so a credits read that fails degrades to
+// omitting that line rather than failing the command.
+func fetchCredits(ctx context.Context, apiBase, key string) *creditsResponse {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		strings.TrimRight(apiBase, "/")+"/api/entitlements/self", nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	res, err := defaultHTTPClient().Do(req)
+	if err != nil {
+		return nil
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	var c creditsResponse
+	if json.Unmarshal(body, &c) != nil {
+		return nil
+	}
+	return &c
+}
+
+// creditBar renders remaining/allotment. Clamped at both ends so an over-spend
+// or a bad allotment cannot draw a negative or runaway bar.
+func creditBar(remaining, total int64) string {
+	const width = 20
+	if total <= 0 {
+		return ""
+	}
+	filled := int(remaining * width / total)
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > width {
+		filled = width
+	}
+	return "[" + strings.Repeat("#", filled) + strings.Repeat("-", width-filled) + "]"
+}
+
+func printCredits(w io.Writer, c *creditsResponse) {
+	if c == nil {
+		fmt.Fprintln(w, "  credits  (could not read your balance)")
+		return
+	}
+	if c.Credit == nil {
+		// A personal-pool verdict carries no workspace balance. Say which pool
+		// rather than implying the number is missing.
+		fmt.Fprintf(w, "  credits  billed to the %s pool\n", firstNonEmptyStr(c.Pool, "personal"))
+		return
+	}
+	if !c.Credit.Known {
+		// The server told us it could not read the balance. That is NOT zero.
+		fmt.Fprintln(w, "  credits  (balance temporarily unavailable)")
+		return
+	}
+	if bar := creditBar(c.Credit.Remaining, c.Credit.Allotment); bar != "" {
+		fmt.Fprintf(w, "  credits  %s  %d of %d left\n", bar, c.Credit.Remaining, c.Credit.Allotment)
+		return
+	}
+	fmt.Fprintf(w, "  credits  %d used\n", c.Credit.Used)
+}
+
+func firstNonEmptyStr(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
+}
+
 func runUsage(args []string) int {
 	fs := flag.NewFlagSet("usage", flag.ContinueOnError)
 	apiBaseFlag := fs.String("api-base", "", "Rindler API origin")
@@ -152,6 +243,9 @@ func runUsage(args []string) int {
 		scope = scopeWorkspace
 	}
 	printUsage(os.Stdout, u, scope)
+	// Credits last and separately: it is a different read against a different
+	// endpoint, and one failing must not take the other's numbers down with it.
+	printCredits(os.Stdout, fetchCredits(ctx, apiBase, key))
 	return 0
 }
 
