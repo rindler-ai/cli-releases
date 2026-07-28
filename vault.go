@@ -207,13 +207,43 @@ func saveVault(vf vaultFile) error {
 	return os.Rename(tmp, p)
 }
 
+// normalizeVaultSite is the vault's canonical form for a site key, and it must
+// stay IDENTICAL to the server's devicehub.normalizeDomain: lowercase, no
+// leading "www.".
+//
+// Not cosmetic. The server does not ping with the domain you typed. When your
+// device's advertised inventory covers the site, it pings with its OWN
+// normalized form of it, so a record stored as "www.example.com" was asked for
+// as "example.com" and an exact match found nothing. The relay then declined
+// "no credential stored", the login carried on without one, and nothing
+// anywhere reported an error -- the credential was simply unreachable for the
+// rest of its life.
 func normalizeVaultSite(raw string) (string, error) {
-	return siteFromTarget(raw)
+	host, err := siteFromTarget(raw)
+	if err != nil {
+		return "", err
+	}
+	return canonicalVaultSite(host), nil
 }
 
+// canonicalVaultSite mirrors the server's normalizeDomain. Kept as its own
+// function so the lookup path can canonicalise a record written by an older
+// build, which stored the host verbatim.
+func canonicalVaultSite(host string) string {
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(host)), "www.")
+}
+
+// findVaultRecord resolves a ping to a stored record.
+//
+// It compares CANONICAL forms on both sides rather than the strings as written.
+// New records are already canonical, but a vault written by an earlier build
+// still holds hosts verbatim, and rewriting someone's credential store on
+// upgrade is a far worse trade than normalising at lookup: a bad migration
+// loses secrets that cannot be recovered, while this costs one string op.
 func findVaultRecord(vf vaultFile, site string) int {
+	want := canonicalVaultSite(site)
 	for i, r := range vf.Records {
-		if strings.EqualFold(r.Site, site) {
+		if canonicalVaultSite(r.Site) == want {
 			return i
 		}
 	}

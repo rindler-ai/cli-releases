@@ -236,10 +236,22 @@ func handlePing(ctx context.Context, c *websocket.Conn, d deviceIdentity, p secr
 // server uses it to route a login here, and it has no business knowing the
 // usernames.
 func handleInventory(ctx context.Context, c *websocket.Conn, requestID string) {
+	// Advertise CANONICAL domains. The server matches this list with its own
+	// normalizeDomain and then pings using the matched entry, so sending a
+	// verbatim "www." host makes it ping for a name our own store does not use.
+	// Canonicalising here means the domain it pings is the domain we look up.
 	domains := []string{}
 	if vf, err := loadVault(); err == nil {
+		seen := map[string]bool{}
 		for _, r := range vf.Records {
-			domains = append(domains, r.Site)
+			d := canonicalVaultSite(r.Site)
+			// An older vault can hold both "example.com" and "www.example.com";
+			// they canonicalise to one domain and the server should see one.
+			if d == "" || seen[d] {
+				continue
+			}
+			seen[d] = true
+			domains = append(domains, d)
 		}
 	}
 	_ = writeWire(ctx, c, relayWire{
