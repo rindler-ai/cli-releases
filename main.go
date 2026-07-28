@@ -70,6 +70,10 @@ func run(args []string) int {
 		return runCreds(args[1:])
 	case "usage":
 		return runUsage(args[1:])
+	case "sessions":
+		return runSessions(args[1:])
+	case "kill":
+		return runKill(args[1:])
 	case "vault":
 		return runVault(args[1:])
 	case "device", "devices":
@@ -97,7 +101,8 @@ func usage(w *os.File) {
 Usage:
   rindler login [--paste] [--no-map] [--no-mcp]  Sign in with Clerk, mint a session-bound MCP key,
                                                  and install the MCP into Claude Code + Codex
-  rindler run --site <d> --action <a> [--limit N] Run actions against a site and follow the job
+  rindler run --site <d> --action <a> [--limit N] [--session <name>]
+                                                 Run actions against a site and follow the job
   rindler run status <job-id> [--once]          Follow a run you already started
   rindler sites                                  List the sites you can act on
   rindler actions <site>                         Show a site's actions and their inputs
@@ -109,6 +114,8 @@ Usage:
   rindler mcp install|status|remove              Manage the MCP install for Claude Code + Codex
   rindler creds add|list|show|rm                  Credentials for a site, encrypted on this device
   rindler usage [--workspace] [--days N] [--json] Your usage, the same numbers the dashboard shows
+  rindler sessions [--json]                      Named browser sessions on this machine
+  rindler kill <name>                            End a named session
   rindler vault status|enable|disable            Turn credential custody on this machine on or off
   rindler device status|list|serve               This machine as a paired device, and the relay
   rindler doctor                                 Diagnose a broken setup and print the fix

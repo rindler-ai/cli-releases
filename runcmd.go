@@ -60,13 +60,16 @@ type retrievalView struct {
 }
 
 type runJobEnvelope struct {
-	JobID   string `json:"job_id"`
-	ID      string `json:"id"`
-	Status  string `json:"status"`
-	Verb    string `json:"verb,omitempty"`
-	Site    string `json:"site,omitempty"`
-	ErrMsg  string `json:"error_msg,omitempty"`
-	Outputs *struct {
+	JobID  string `json:"job_id"`
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Verb   string `json:"verb,omitempty"`
+	// SessionID is the browser this run used. Populated for the run verb only,
+	// and the one way a caller learns which session to reuse next time.
+	SessionID string `json:"session_id,omitempty"`
+	Site      string `json:"site,omitempty"`
+	ErrMsg    string `json:"error_msg,omitempty"`
+	Outputs   *struct {
 		Records   []map[string]any `json:"records"`
 		Truncated bool             `json:"truncated,omitempty"`
 	} `json:"outputs,omitempty"`
@@ -154,6 +157,7 @@ func runRun(args []string) int {
 	site := fs.String("site", "", "site domain or URL to run against")
 	mode := fs.String("mode", "", "optional run mode passed through to the server")
 	limit := fs.Int("limit", 0, "max records for a list action (0 = the site's default)")
+	sessionName := fs.String("session", "", "reuse a named browser session (auto-numbered when omitted)")
 	apiBaseFlag := fs.String("api-base", "", "Rindler API origin (defaults to the one you logged in against)")
 	timeout := fs.Duration("timeout", 15*time.Minute, "how long to follow the run")
 	noWait := fs.Bool("no-wait", false, "start the run and print the job id instead of following it")
@@ -185,10 +189,24 @@ func runRun(args []string) int {
 	defer cancel()
 	httpc := defaultHTTPClient()
 
-	jobID, err := startRun(ctx, httpc, apiBase, key, host, actions, inputMap, *mode, *limit)
+	// Named sessions. The NAME is ours; the server only ever sees an id.
+	name := normalizeSessionName(*sessionName)
+	if name == "" {
+		// Unnamed runs still get a name, tmux-style, so a follow-up can address
+		// this session at all. Without one there would be nothing to reuse.
+		name = nextAutoName(loadSessions())
+	}
+	jobID, sessionID, err := startRunInSession(
+		ctx, httpc, apiBase, key, host, actions, inputMap, *mode, *limit, name)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "run:", err)
 		return 1
+	}
+	if sessionID != "" {
+		if bindErr := bindSession(name, sessionID); bindErr != nil {
+			// A failed bind costs a future reuse, not this run. Say so and carry on.
+			fmt.Fprintf(os.Stderr, "warning: could not remember session %q: %v\n", name, bindErr)
+		}
 	}
 	if !*jsonOut {
 		fmt.Printf("Running %s on %s…\njob %s\n", strings.Join(actions, ", "), host, jobID)
@@ -307,9 +325,17 @@ func verbError(verb string, code int, body string) error {
 	return fmt.Errorf("%s failed (HTTP %d): %s", verb, code, strings.TrimSpace(body))
 }
 
+// startRun is the no-session form, kept for callers that never reuse one.
 func startRun(
 	ctx context.Context, httpc *http.Client, apiBase, key, site string,
 	actions []string, inputs map[string]string, mode string, limit int,
+) (string, error) {
+	return startRunWithSession(ctx, httpc, apiBase, key, site, actions, inputs, mode, limit, "")
+}
+
+func startRunWithSession(
+	ctx context.Context, httpc *http.Client, apiBase, key, site string,
+	actions []string, inputs map[string]string, mode string, limit int, sessionID string,
 ) (string, error) {
 	payload := map[string]any{
 		"site":            site,
@@ -327,6 +353,11 @@ func startRun(
 	// asking for zero records.
 	if limit > 0 {
 		payload["limit"] = limit
+	}
+	// Only when reusing. An empty session_id would be a request to reuse nothing,
+	// which the server refuses rather than reading as "open a fresh one".
+	if strings.TrimSpace(sessionID) != "" {
+		payload["session_id"] = sessionID
 	}
 	b, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+"/v1/runtime/run", bytes.NewReader(b))
@@ -580,4 +611,53 @@ func runRunStatus(args []string) int {
 		return 0
 	}
 	return followRun(ctx, httpc, apiBase, key, jobID, *jsonOut)
+}
+
+// startRunInSession starts a run bound to a NAMED session, and returns the
+// browser session it actually used so the name can be (re)bound to it.
+//
+// TRANSPARENT RE-ATTACH lives here. A bound id eventually dies: the idle reaper
+// takes it, or the max lifetime does. When the server answers session_not_found
+// for the id we sent, that is not a failure to report -- the caller asked for a
+// session called `name`, not for one specific browser -- so we retry once
+// WITHOUT the id and let a fresh session open under the same name.
+//
+// Retried ONCE, and only for that one class. A second failure is a real one, and
+// retrying anything else would turn an unrelated error into two identical
+// attempts.
+func startRunInSession(
+	ctx context.Context, httpc *http.Client, apiBase, key, site string,
+	actions []string, inputs map[string]string, mode string, limit int, name string,
+) (jobID string, sessionID string, err error) {
+	bound := sessionIDFor(name)
+
+	jobID, err = startRunWithSession(ctx, httpc, apiBase, key, site, actions, inputs, mode, limit, bound)
+	if err != nil && bound != "" && isSessionGone(err) {
+		// The name outlives the browser. Drop the stale binding first, so a
+		// failure after this point does not leave a known-dead id bound.
+		_ = unbindSession(name)
+		fmt.Fprintf(os.Stderr, "• session %q had expired; starting a fresh one\n", name)
+		jobID, err = startRunWithSession(ctx, httpc, apiBase, key, site, actions, inputs, mode, limit, "")
+	}
+	if err != nil {
+		return "", "", err
+	}
+	// Which browser it used is only knowable from the JOB, not from the start
+	// response, so one poll resolves it. Cheap: the follow loop is about to poll
+	// anyway, and a run with no session yet simply reports none.
+	if env, pollErr := runJob(ctx, httpc, apiBase, key, jobID); pollErr == nil {
+		sessionID = env.SessionID
+	}
+	return jobID, sessionID, nil
+}
+
+// isSessionGone reports whether a failure means "that session is not available",
+// the one class re-attach is allowed to retry.
+func isSessionGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "session_not_found") ||
+		strings.Contains(msg, "that session is not available")
 }
