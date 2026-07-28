@@ -153,9 +153,16 @@ func runLogout(args []string) int {
 		if apiBase == "" {
 			apiBase = defaultAPIBase
 		}
-		if ok, _ := revokeSelf(ctx, defaultHTTPClient(), apiBase, key); ok {
+		switch outcome, _ := revokeSelf(ctx, defaultHTTPClient(), apiBase, key); outcome {
+		case revokeDone:
 			fmt.Println("✓ Key revoked server-side.")
-		} else {
+		case revokeNothingToDo:
+			// Also a success, and the common one after a few days away: the key
+			// lapsed with its Clerk session, so there was nothing live to retire.
+			// Saying "revoked" would claim an action nobody took, and warning
+			// would report a problem that does not exist.
+			fmt.Println("✓ Key was already expired server-side; nothing to revoke.")
+		default:
 			fmt.Println("• Could not revoke remotely (it expires with your Clerk session, or revoke it in the dashboard).")
 		}
 	}

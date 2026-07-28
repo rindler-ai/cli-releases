@@ -18,9 +18,9 @@ func TestRevokeSelfClassifies(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ok, err := revokeSelf(context.Background(), srv.Client(), srv.URL, "rindler_live_k")
-	if err != nil || !ok {
-		t.Fatalf("2xx should revoke: ok=%v err=%v", ok, err)
+	outcome, err := revokeSelf(context.Background(), srv.Client(), srv.URL, "rindler_live_k")
+	if err != nil || outcome != revokeDone {
+		t.Fatalf("2xx should revoke: outcome=%v err=%v", outcome, err)
 	}
 	if gotAuth != "Bearer rindler_live_k" || gotPath != "/api/cli/logout" {
 		t.Errorf("auth=%q path=%q", gotAuth, gotPath)
@@ -33,9 +33,9 @@ func TestRevokeSelfClassifies(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer gone.Close()
-	ok, err = revokeSelf(context.Background(), gone.Client(), gone.URL, "k")
-	if err != nil || ok {
-		t.Errorf("404 should be (false, nil), got ok=%v err=%v", ok, err)
+	outcome, err = revokeSelf(context.Background(), gone.Client(), gone.URL, "k")
+	if err != nil || outcome != revokeUnreachable {
+		t.Errorf("404 should be (false, nil), got outcome=%v err=%v", outcome, err)
 	}
 }
 
@@ -139,5 +139,44 @@ func TestResolveKeyAndBaseQuietFailsLoggedOut(t *testing.T) {
 	os.Unsetenv("RINDLER_API_KEY")
 	if _, _, code := resolveKeyAndBaseQuiet(""); code == 0 {
 		t.Error("logged out should not resolve a key")
+	}
+}
+
+// The server answers 200 {"ok":true,"revoked":<bool>}, and `revoked` is false
+// whenever there was nothing live to retire -- the key had already lapsed with
+// its Clerk session. THREE outcomes, because two of them are successes and
+// conflating them makes one read as a failure.
+func TestLogoutTellsTheTwoSuccessesApart(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		want       revokeOutcome
+	}{
+		{"revoked a live key", `{"ok":true,"revoked":true}`, 200, revokeDone},
+		// The DOMINANT case after a few days away. A success, not a warning.
+		{"nothing left to revoke", `{"ok":true,"revoked":false}`, 200, revokeNothingToDo},
+		// A 2xx with no discriminator: treat as done, since the difference only
+		// changes a sentence.
+		{"2xx with no revoked field", `{"ok":true}`, 200, revokeDone},
+		{"2xx with no body at all", ``, 204, revokeDone},
+		{"unparseable body", `<html>ok</html>`, 200, revokeDone},
+		// Not deployed, or refused: we could not tell the server.
+		{"endpoint absent", ``, 404, revokeUnreachable},
+		{"server error", ``, 500, revokeUnreachable},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(tc.status)
+			if tc.body != "" {
+				_, _ = w.Write([]byte(tc.body))
+			}
+		}))
+		got, err := revokeSelf(context.Background(), srv.Client(), srv.URL, "rindler_live_k")
+		srv.Close()
+		if err != nil {
+			t.Errorf("%s: unexpected error %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: outcome %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

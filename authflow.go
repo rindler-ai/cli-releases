@@ -146,22 +146,58 @@ func defaultHTTPClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
+// revokeOutcome is what happened server-side at logout. THREE states, because
+// the server distinguishes two successes and conflating them makes one of them
+// read as a failure.
+type revokeOutcome int
+
+const (
+	// revokeUnreachable: we could not tell the server. Local state is still
+	// cleared; the key expires with the Clerk session anyway.
+	revokeUnreachable revokeOutcome = iota
+	// revokeDone: the server retired a live key.
+	revokeDone
+	// revokeNothingToDo: the server answered fine and had nothing to revoke,
+	// because the key had already lapsed with its Clerk session. That is the
+	// DOMINANT case for anyone who has been away a while, and it is a success:
+	// the key is gone, which is what was asked for.
+	revokeNothingToDo
+)
+
 // revokeSelf best-effort revokes the presented key server-side (logout). It POSTs
 // the key as a Bearer to /api/cli/logout; a 404 (endpoint not yet deployed) or
 // any transport error is returned so the caller can note it, but logout still
-// clears local state regardless. ok is true only on a 2xx.
-func revokeSelf(ctx context.Context, httpc *http.Client, apiBase, key string) (ok bool, err error) {
+// clears local state regardless.
+//
+// The response is 200 {"ok":true,"revoked":<bool>}, and `revoked` is false
+// whenever there was nothing live to retire. Reading only the STATUS reported
+// "✓ Key revoked server-side" for a key that had already expired -- true in
+// outcome, false in what it claimed to have done -- and treating false as a
+// failure instead would print a warning for the most common healthy case.
+func revokeSelf(ctx context.Context, httpc *http.Client, apiBase, key string) (revokeOutcome, error) {
 	endpoint := strings.TrimRight(apiBase, "/") + "/api/cli/logout"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
-		return false, err
+		return revokeUnreachable, err
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := httpc.Do(req)
 	if err != nil {
-		return false, err
+		return revokeUnreachable, err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
-	return resp.StatusCode >= 200 && resp.StatusCode < 300, nil
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return revokeUnreachable, nil
+	}
+	// An unreadable or absent `revoked` is treated as DONE rather than
+	// nothing-to-do: the server said 2xx, and the difference between the two
+	// successes only changes a sentence.
+	var out struct {
+		Revoked *bool `json:"revoked"`
+	}
+	if json.Unmarshal(body, &out) == nil && out.Revoked != nil && !*out.Revoked {
+		return revokeNothingToDo, nil
+	}
+	return revokeDone, nil
 }
