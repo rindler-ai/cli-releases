@@ -139,7 +139,7 @@ func TestFollowRunSucceedsOnCompleteWithRecords(t *testing.T) {
 	  "outputs":{"records":[{"title":"A"},{"title":"B"}]},
 	  "retrieval":{"outcome":"records","complete":true}}`)
 	defer srv.Close()
-	if code := followRun(context.Background(), srv.Client(), srv.URL, "k", "j1", false); code != 0 {
+	if code := followRun(context.Background(), srv.Client(), srv.URL, "k", "j1", false, ""); code != 0 {
 		t.Fatalf("a complete run with records must exit 0, got %d", code)
 	}
 }
@@ -153,7 +153,7 @@ func TestFollowRunFailsWhenRetrievalIsIncomplete(t *testing.T) {
 	  "retrieval":{"outcome":"blocked","complete":false,"failure_shape":"bot_wall",
 	               "reasons":["challenge page served"],"retry_guidance":"retry via a stealth tier"}}`)
 	defer srv.Close()
-	if code := followRun(context.Background(), srv.Client(), srv.URL, "k", "j1", false); code == 0 {
+	if code := followRun(context.Background(), srv.Client(), srv.URL, "k", "j1", false, ""); code == 0 {
 		t.Fatal("a job that ran but retrieved nothing usable must NOT exit 0")
 	}
 }
@@ -161,7 +161,7 @@ func TestFollowRunFailsWhenRetrievalIsIncomplete(t *testing.T) {
 func TestFollowRunFailsOnFailedStatus(t *testing.T) {
 	srv := jobServer(t, `{"status":"failed","error_msg":"selector gone","usage":{"outcome_count":0}}`)
 	defer srv.Close()
-	if code := followRun(context.Background(), srv.Client(), srv.URL, "k", "j1", false); code == 0 {
+	if code := followRun(context.Background(), srv.Client(), srv.URL, "k", "j1", false, ""); code == 0 {
 		t.Fatal("a failed job must exit non-zero")
 	}
 }
