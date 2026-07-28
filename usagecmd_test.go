@@ -342,3 +342,63 @@ func TestTheSuccessRateIsTreatedAsAPercentage(t *testing.T) {
 		t.Errorf("the workspace rate is in different units:\n%s", wb.String())
 	}
 }
+
+// `usage --workspace` printed "completed 0" for every workspace on earth.
+//
+// workspace_totals is {actions, successes, blocked, credits} — it has NO
+// `completed`, and none of the other outcome buckets. The workspace view was
+// rendering the personal layout over it, so the field it read was always the
+// zero value while `actions` said thousands.
+//
+// The fix reports SUCCESSES there, labelled as such. Copying successes into
+// Completed would have made a number appear at the cost of mislabelling it: the
+// two differ, which is the whole reason the per-member row carries both.
+func TestTheWorkspaceViewReportsAMeasurementItActuallyHas(t *testing.T) {
+	var u usageResponse
+	if err := json.Unmarshal([]byte(realServerBody), &u); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	printUsage(&b, u, scopeWorkspace)
+	out := b.String()
+
+	// 8402 successes over 9130 actions.
+	if !strings.Contains(out, "8402") {
+		t.Errorf("the workspace successes are missing:\n%s", out)
+	}
+	if !strings.Contains(out, "succeeded") {
+		t.Errorf("the number is not labelled as successes:\n%s", out)
+	}
+	// The bug: a zero where a real number belongs.
+	if strings.Contains(out, "completed    0") || strings.Contains(out, "succeeded    0") {
+		t.Errorf("rendered a zero for a workspace with 9130 actions:\n%s", out)
+	}
+	// And it must not claim to be the per-member measurement.
+	if strings.Contains(out, "completed") {
+		t.Errorf("the workspace view used the per-member label:\n%s", out)
+	}
+}
+
+// The burn line must use the credits that match the numbers above it. Under
+// --workspace, a burn derived from YOUR credits contradicts the workspace figures
+// on screen by whatever share of the pool you are.
+func TestBurnFollowsTheScopeOnScreen(t *testing.T) {
+	var u usageResponse
+	if err := json.Unmarshal([]byte(realServerBody), &u); err != nil {
+		t.Fatal(err)
+	}
+	// mine.credits = 57, workspace_totals.credits = 1244, window 30 days.
+	var mine strings.Builder
+	printBurn(&mine, u, nil, scopeMe)
+	if !strings.Contains(mine.String(), "1.9") {
+		t.Errorf("personal burn should be 57/30 = 1.9:\n%s", mine.String())
+	}
+	var ws strings.Builder
+	printBurn(&ws, u, nil, scopeWorkspace)
+	if !strings.Contains(ws.String(), "41.5") {
+		t.Errorf("workspace burn should be 1244/30 = 41.5:\n%s", ws.String())
+	}
+	if strings.Contains(ws.String(), "1.9 credits") {
+		t.Error("the workspace view showed the personal burn")
+	}
+}

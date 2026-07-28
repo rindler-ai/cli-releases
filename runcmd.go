@@ -252,7 +252,11 @@ func runRun(args []string) int {
 		fmt.Fprintln(os.Stderr, "run:", err)
 		return 1
 	}
+	// Already known when reusing; otherwise the follow loop binds it as soon as
+	// the server reports which browser the run got.
+	pending := name
 	if sessionID != "" {
+		pending = ""
 		if bindErr := bindSession(name, sessionID); bindErr != nil {
 			// A failed bind costs a future reuse, not this run. Say so and carry on.
 			fmt.Fprintf(os.Stderr, "warning: could not remember session %q: %v\n", name, bindErr)
@@ -265,7 +269,7 @@ func runRun(args []string) int {
 		fmt.Printf("Follow it with: rindler run status %s\n", jobID)
 		return 0
 	}
-	return followRun(ctx, httpc, apiBase, key, jobID, *jsonOut)
+	return followRun(ctx, httpc, apiBase, key, jobID, *jsonOut, pending)
 }
 
 // resolveKeyAndBase is the shared "am I logged in, and against what" step.
@@ -380,12 +384,13 @@ func startRun(
 	ctx context.Context, httpc *http.Client, apiBase, key, site string,
 	actions []string, inputs map[string]string, mode string, limit int,
 ) (string, error) {
-	return startRunWithSession(ctx, httpc, apiBase, key, site, actions, inputs, mode, limit, "")
+	return startRunWithSession(ctx, httpc, apiBase, key, site, actions, inputs, mode, limit, "", false)
 }
 
 func startRunWithSession(
 	ctx context.Context, httpc *http.Client, apiBase, key, site string,
-	actions []string, inputs map[string]string, mode string, limit int, sessionID string,
+	actions []string, inputs map[string]string, mode string, limit int,
+	sessionID string, keepSession bool,
 ) (string, error) {
 	payload := map[string]any{
 		"site":            site,
@@ -408,6 +413,12 @@ func startRunWithSession(
 	// which the server refuses rather than reading as "open a fresh one".
 	if strings.TrimSpace(sessionID) != "" {
 		payload["session_id"] = sessionID
+	} else if keepSession {
+		// Opening a session a later run will reuse. Without this the server closes
+		// it when this run finishes and there is never a live session for a name to
+		// point at -- which made --session silently open a fresh browser every
+		// time.
+		payload["keep_session"] = true
 	}
 	b, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+"/v1/runtime/run", bytes.NewReader(b))
@@ -469,10 +480,28 @@ func runJob(ctx context.Context, httpc *http.Client, apiBase, key, jobID string)
 	return out, nil
 }
 
-func followRun(ctx context.Context, httpc *http.Client, apiBase, key, jobID string, jsonOut bool) int {
+// followRun polls a job to a terminal state.
+//
+// bindName, when set, is the session name waiting for an id. The id is NOT
+// available at the 202: the server writes it when the run actually starts its
+// browser (RunStarted), so a poll fired immediately after submission always sees
+// nothing -- which is exactly how the first version of named sessions came to
+// bind nothing at all and silently open a fresh browser every time. Binding here,
+// on the first poll that carries one, is the earliest honest moment.
+func followRun(
+	ctx context.Context, httpc *http.Client, apiBase, key, jobID string, jsonOut bool, bindName string,
+) int {
+	bound := false
 	last := ""
 	for {
 		env, err := runJob(ctx, httpc, apiBase, key, jobID)
+		if err == nil && !bound && bindName != "" && env.SessionID != "" {
+			bound = true
+			if bindErr := bindSession(bindName, env.SessionID); bindErr != nil {
+				// A failed bind costs a future reuse, not this run.
+				fmt.Fprintf(os.Stderr, "warning: could not remember session %q: %v\n", bindName, bindErr)
+			}
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				fmt.Fprintf(os.Stderr, "\nstopped following after the timeout; the run may still be going.\n"+
@@ -667,7 +696,7 @@ func runRunStatus(args []string) int {
 		// the thing it shortcuts is worse than no shortcut.
 		return runExitCode(env)
 	}
-	return followRun(ctx, httpc, apiBase, key, jobID, *jsonOut)
+	return followRun(ctx, httpc, apiBase, key, jobID, *jsonOut, "")
 }
 
 // startRunInSession starts a run bound to a NAMED session, and returns the
@@ -688,24 +717,27 @@ func startRunInSession(
 ) (jobID string, sessionID string, err error) {
 	bound := sessionIDFor(name)
 
-	jobID, err = startRunWithSession(ctx, httpc, apiBase, key, site, actions, inputs, mode, limit, bound)
+	// keep_session ONLY when opening one. A run reusing a session must not ask to
+	// extend its life; whoever opened it owns that.
+	jobID, err = startRunWithSession(
+		ctx, httpc, apiBase, key, site, actions, inputs, mode, limit, bound, bound == "")
 	if err != nil && bound != "" && isSessionGone(err) {
 		// The name outlives the browser. Drop the stale binding first, so a
 		// failure after this point does not leave a known-dead id bound.
 		_ = unbindSession(name)
 		fmt.Fprintf(os.Stderr, "• session %q had expired; starting a fresh one\n", name)
-		jobID, err = startRunWithSession(ctx, httpc, apiBase, key, site, actions, inputs, mode, limit, "")
+		jobID, err = startRunWithSession(
+			ctx, httpc, apiBase, key, site, actions, inputs, mode, limit, "", true)
 	}
 	if err != nil {
 		return "", "", err
 	}
-	// Which browser it used is only knowable from the JOB, not from the start
-	// response, so one poll resolves it. Cheap: the follow loop is about to poll
-	// anyway, and a run with no session yet simply reports none.
-	if env, pollErr := runJob(ctx, httpc, apiBase, key, jobID); pollErr == nil {
-		sessionID = env.SessionID
+	// Reusing? Then we already know the id, and the server just confirmed it by
+	// accepting the run.
+	if bound != "" {
+		return jobID, bound, nil
 	}
-	return jobID, sessionID, nil
+	return jobID, "", nil
 }
 
 // isSessionGone reports whether a failure means "that session is not available",

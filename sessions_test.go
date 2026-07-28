@@ -156,7 +156,7 @@ func TestSessionIDIsSentOnlyWhenReusing(t *testing.T) {
 			_, _ = w.Write([]byte(`{"job_id":"j1"}`))
 		}))
 		_, err := startRunWithSession(t.Context(), srv.Client(), srv.URL, "k", "example.com",
-			[]string{"search"}, nil, "", 0, tc.session)
+			[]string{"search"}, nil, "", 0, tc.session, tc.session == "")
 		srv.Close()
 		if err != nil {
 			t.Fatalf("session %q: %v", tc.session, err)
@@ -349,5 +349,104 @@ func TestAByPassedLockStillCannotCorruptTheBook(t *testing.T) {
 	// self-healing. Losing EVERYTHING is the failure this guards.
 	if len(book.Bound) == 0 {
 		t.Fatal("every name was lost: a writer published a half-written book")
+	}
+}
+
+// THE TEST THAT WAS MISSING, and whose absence let the entire named-session
+// feature ship inert.
+//
+// Two independent holes, both invisible without an end-to-end binding test:
+//
+//  1. the first run CLOSED the session it opened, so there was never a live one
+//     for a name to point at. Fixed by keep_session.
+//  2. the session id was read from a poll fired immediately after the 202, but
+//     the server writes it when the run STARTS its browser. That poll always saw
+//     nothing, so the name never bound.
+//
+// Net effect: `--session trip` twice gave two unrelated browsers and said nothing
+// was wrong. Every unit test passed, because none of them asserted that a NAME
+// ends up bound to an ID.
+func TestANamedRunActuallyBindsTheSessionItGot(t *testing.T) {
+	isolate(t)
+	t.Setenv("RINDLER_API_KEY", "rindler_live_test")
+
+	var sawKeep bool
+	polls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/runtime/run", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sawKeep, _ = body["keep_session"].(bool)
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"job_id":"j1"}`))
+	})
+	mux.HandleFunc("GET /v1/runtime/jobs/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		polls++
+		// The REAL ordering: no session on the first poll, because the browser has
+		// not started yet. A test that returned one immediately would pass against
+		// the broken code.
+		if polls == 1 {
+			_, _ = w.Write([]byte(`{"job_id":"j1","status":"running"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"job_id":"j1","status":"complete","session_id":"sess-real",
+		                        "outputs":{"records":[]},"retrieval":{"outcome":"ok","complete":true}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	if code := runRun([]string{
+		"--site", "example.com", "--action", "search",
+		"--session", "trip", "--api-base", srv.URL,
+	}); code != 0 {
+		t.Fatalf("run exited %d", code)
+	}
+
+	if !sawKeep {
+		t.Error("the first run must ask the server to KEEP the session, or there is nothing to reuse")
+	}
+	if got := sessionIDFor("trip"); got != "sess-real" {
+		t.Fatalf("the name bound to %q, want sess-real -- named sessions are inert", got)
+	}
+}
+
+// The SECOND run must send the bound id and must NOT ask to keep: whoever opened
+// the session owns its lifetime.
+func TestASecondNamedRunReusesAndDoesNotAskToKeep(t *testing.T) {
+	isolate(t)
+	t.Setenv("RINDLER_API_KEY", "rindler_live_test")
+	if err := bindSession("trip", "sess-existing"); err != nil {
+		t.Fatal(err)
+	}
+
+	var sentID string
+	var sawKeep bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/runtime/run", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sentID, _ = body["session_id"].(string)
+		sawKeep, _ = body["keep_session"].(bool)
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"job_id":"j2"}`))
+	})
+	mux.HandleFunc("GET /v1/runtime/jobs/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"job_id":"j2","status":"complete","session_id":"sess-existing",
+		                        "outputs":{"records":[]},"retrieval":{"outcome":"ok","complete":true}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	if code := runRun([]string{
+		"--site", "example.com", "--action", "search",
+		"--session", "trip", "--api-base", srv.URL,
+	}); code != 0 {
+		t.Fatalf("run exited %d", code)
+	}
+	if sentID != "sess-existing" {
+		t.Errorf("sent session_id %q, want the bound one", sentID)
+	}
+	if sawKeep {
+		t.Error("a reusing run must not ask to keep somebody else's session alive")
 	}
 }

@@ -327,7 +327,7 @@ func runUsage(args []string) int {
 	// endpoint, and one failing must not take the other's numbers down with it.
 	credits := fetchCredits(ctx, apiBase, key)
 	printCredits(os.Stdout, credits)
-	printBurn(os.Stdout, u, credits)
+	printBurn(os.Stdout, u, credits, scope)
 	printSelfShape(os.Stdout, u)
 	printDisclosures(os.Stdout, u)
 	return 0
@@ -336,6 +336,10 @@ func runUsage(args []string) int {
 func printUsage(w io.Writer, u usageResponse, scope string) {
 	row := u.Mine
 	heading := "Your usage"
+	// `completed` is the per-member measurement. The workspace row has no such
+	// field, so its label changes with the scope rather than lying about which
+	// number is on screen.
+	completedLabel := "completed   "
 	if scope == scopeWorkspace {
 		heading = "Workspace usage"
 		row = usageRow{
@@ -347,6 +351,16 @@ func printUsage(w io.Writer, u usageResponse, scope string) {
 			// the same two numbers rather than leaving a silent 0.0.
 			SuccessRate: rate(u.WorkspaceTotals.Successes, u.WorkspaceTotals.Actions),
 		}
+		// workspace_totals is {actions, successes, blocked, credits} -- it has NO
+		// `completed`, and none of the other outcome buckets either. Rendering the
+		// personal layout over it printed "completed 0" beside "actions 9130" for
+		// every workspace on earth.
+		//
+		// So the workspace view reports SUCCESSES, which is the measurement it
+		// actually has. Copying successes into Completed would have made the number
+		// appear at the cost of mislabelling it: the two differ, and the difference
+		// is the whole reason the per-member row carries both.
+		completedLabel = "succeeded   "
 	}
 
 	if u.WindowDays > 0 {
@@ -361,8 +375,11 @@ func printUsage(w io.Writer, u usageResponse, scope string) {
 	// The rate is the server's, derived from completed/(completed+failed). It is
 	// printed against `completed` because that is its numerator -- putting it
 	// beside `successes`, as this once did, paired two different measurements.
-	fmt.Fprintf(w, "  completed    %d (%.0f%% success rate)\n",
-		row.Completed, row.SuccessRate)
+	shown := row.Completed
+	if scope == scopeWorkspace {
+		shown = row.Successes
+	}
+	fmt.Fprintf(w, "  %s %d (%.0f%% success rate)\n", completedLabel, shown, row.SuccessRate)
 	if row.HandedOff > 0 {
 		// The one people most need: not broken, waiting on a human.
 		fmt.Fprintf(w, "  handed back  %d (an auth wall or captcha needed you)\n", row.HandedOff)
@@ -441,8 +458,15 @@ func rate(successes, actions int64) float64 {
 // restate what is on screen -- which is the point: a reader should be able to
 // check them. Anything it cannot compute honestly is omitted rather than
 // rendered as a zero.
-func printBurn(w io.Writer, u usageResponse, c *creditsResponse) {
-	burn := burnRate(u.Mine.Credits, u.WindowDays)
+func printBurn(w io.Writer, u usageResponse, c *creditsResponse, scope string) {
+	// The credits that match what is on screen. Under --workspace the numbers
+	// above are the workspace's, so a burn derived from YOUR credits would
+	// contradict them by whatever share of the pool you are.
+	spent := u.Mine.Credits
+	if scope == scopeWorkspace {
+		spent = u.WorkspaceTotals.Credits
+	}
+	burn := burnRate(spent, u.WindowDays)
 	if burn <= 0 {
 		return
 	}

@@ -60,7 +60,7 @@ func TestAnUncomputableBurnIsOmittedNotZeroed(t *testing.T) {
 	_ = json.Unmarshal([]byte(`{"window_days":30,"end_at":"2026-07-27T00:00:00Z",
 	    "mine":{"actor":"you","actions":5,"credits":0}}`), &u)
 	var b strings.Builder
-	printBurn(&b, u, nil)
+	printBurn(&b, u, nil, scopeMe)
 	if strings.Contains(b.String(), "burn") {
 		t.Fatalf("a zero burn was rendered:\n%s", b.String())
 	}
@@ -81,7 +81,7 @@ func TestNoRunwayFromAnUnknownBalance(t *testing.T) {
 	_ = json.Unmarshal([]byte(
 		`{"pool":"workspace","workspace_credit":{"known":false,"remaining":5000,"allotment":10000}}`), &unknown)
 	var b strings.Builder
-	printBurn(&b, u, &unknown)
+	printBurn(&b, u, &unknown, scopeMe)
 	out := b.String()
 	if !strings.Contains(out, "burn") {
 		t.Error("the burn itself is computable and should print")
@@ -93,7 +93,7 @@ func TestNoRunwayFromAnUnknownBalance(t *testing.T) {
 	var known creditsResponse
 	_ = json.Unmarshal([]byte(`{"pool":"workspace","workspace_credit":{"known":true,"remaining":200,"allotment":1000}}`), &known)
 	var b2 strings.Builder
-	printBurn(&b2, u, &known)
+	printBurn(&b2, u, &known, scopeMe)
 	if !strings.Contains(b2.String(), "runway") {
 		t.Errorf("a known balance should yield a projection:\n%s", b2.String())
 	}
