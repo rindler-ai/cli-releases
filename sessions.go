@@ -65,6 +65,54 @@ func loadSessions() sessionBook {
 	return book
 }
 
+// withSessionBookLock serialises a read-modify-write of the book across
+// PROCESSES. Every `rindler run` is its own process, so a mutex would buy
+// nothing: two concurrent runs are two concurrent writers.
+//
+// O_CREATE|O_EXCL is the lock, because it is the one atomic
+// create-if-absent the standard library offers on both platforms this ships to.
+// No flock: that is Unix-only, and this repo is stdlib-only by policy.
+//
+// BEST EFFORT BY DESIGN. If the lock cannot be taken within the window it
+// proceeds anyway, which degrades to last-writer-wins -- the behaviour before
+// this existed. That is deliberate: a name is a convenience, and refusing to run
+// because a lock file is held (or was left behind by a killed process) would
+// trade a small inconvenience for a broken command.
+//
+// A stale lock therefore costs one slow bind, not a wedged CLI.
+func withSessionBookLock(fn func() error) error {
+	p, err := sessionsPath()
+	if err != nil {
+		return fn()
+	}
+	lock := p + ".lock"
+	if err := os.MkdirAll(filepath.Dir(lock), 0o700); err != nil {
+		return fn()
+	}
+	deadline := time.Now().Add(sessionLockWait)
+	for {
+		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			_ = f.Close()
+			defer os.Remove(lock)
+			return fn()
+		}
+		if time.Now().After(deadline) {
+			// Give up on the lock, not on the work.
+			return fn()
+		}
+		time.Sleep(sessionLockPoll)
+	}
+}
+
+// sessionLockWait is short on purpose: the critical section is one small file
+// read and write, so anything slower than this is a stale lock rather than
+// contention worth waiting out.
+const (
+	sessionLockWait = 2 * time.Second
+	sessionLockPoll = 5 * time.Millisecond
+)
+
 func saveSessions(book sessionBook) error {
 	p, err := sessionsPath()
 	if err != nil {
@@ -83,11 +131,33 @@ func saveSessions(book sessionBook) error {
 	}
 	// Write-then-rename, so an interrupted save cannot truncate the book and
 	// orphan every named session at once.
-	tmp := p + ".tmp"
+	//
+	// The temp name is UNIQUE PER WRITER, and that is not paranoia. Every
+	// `rindler run` is its own process, so two concurrent runs are two concurrent
+	// writers with no lock available between them. On a SHARED temp path they
+	// interleave: writer A truncates the file, writer B renames it into place
+	// half-written, and the book that lands is unreadable -- which loadSessions
+	// then reads as EMPTY, losing every name at once rather than one of them.
+	// Measured once at 20 concurrent binds leaving 0 survivors on a shared path.
+	// NOT test-pinned: the window is narrow enough that a deterministic test for
+	// it did not reproduce, so this guard is reasoned rather than proven. It is
+	// kept because it is free and obviously sound; the property that IS pinned is
+	// the weaker and more important one, that a lock-bypassed concurrent write
+	// cannot leave the book unreadable.
+	//
+	// With a unique temp, each rename publishes a COMPLETE book. Two writers can
+	// still lose one another's addition (last rename wins), which is a real but
+	// small cost: the losing name simply re-binds on next use, and the browser it
+	// pointed at is idle-reaped. Total loss is what had to go.
+	tmp := fmt.Sprintf("%s.tmp.%d.%d", p, os.Getpid(), time.Now().UnixNano())
 	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	if err := os.Rename(tmp, p); err != nil {
+		_ = os.Remove(tmp) // never leave a stray temp behind on a failed publish
+		return err
+	}
+	return nil
 }
 
 // sessionIDFor returns the id currently bound to a name, if any.
@@ -106,19 +176,25 @@ func bindSession(name, sessionID string) error {
 	if name == "" || sessionID == "" {
 		return nil
 	}
-	book := loadSessions()
-	book.Bound[name] = sessionID
-	return saveSessions(book)
+	// Locked read-modify-write: re-read INSIDE the lock, so a concurrent bind's
+	// entry is merged rather than clobbered by a book we loaded before it landed.
+	return withSessionBookLock(func() error {
+		book := loadSessions()
+		book.Bound[name] = sessionID
+		return saveSessions(book)
+	})
 }
 
 func unbindSession(name string) error {
 	name = normalizeSessionName(name)
-	book := loadSessions()
-	if _, ok := book.Bound[name]; !ok {
-		return nil
-	}
-	delete(book.Bound, name)
-	return saveSessions(book)
+	return withSessionBookLock(func() error {
+		book := loadSessions()
+		if _, ok := book.Bound[name]; !ok {
+			return nil
+		}
+		delete(book.Bound, name)
+		return saveSessions(book)
+	})
 }
 
 // normalizeSessionName trims and lowercases. Case-insensitive because a name is

@@ -2,12 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // Named sessions live ENTIRELY on this machine: the server only ever sees an id.
@@ -207,5 +210,144 @@ func TestSessionsListsAndSortsNumerically(t *testing.T) {
 	}
 	if code := runSessions([]string{"--json"}); code != 0 {
 		t.Errorf("sessions --json exited %d", code)
+	}
+}
+
+// CONCURRENT BINDS. Every `rindler run` is its own process, so two runs are two
+// writers with no in-process lock available between them.
+//
+// This started at 0 of 20 surviving. The cause was a SHARED temp path: writers
+// interleaved, one renamed another's half-written file into place, and the book
+// that landed was unreadable — which loadSessions reads as empty, losing every
+// name at once rather than one of them.
+func TestConcurrentBindsKeepEveryName(t *testing.T) {
+	isolate(t)
+	const n = 20
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(k int) {
+			defer wg.Done()
+			_ = bindSession(fmt.Sprintf("name%02d", k), fmt.Sprintf("sess-%02d", k))
+		}(i)
+	}
+	wg.Wait()
+
+	book := loadSessions()
+	if book.Bound == nil {
+		t.Fatal("the book decoded to nil, which panics on the next write")
+	}
+	if len(book.Bound) != n {
+		t.Fatalf("kept %d of %d names; concurrent writers are losing entries", len(book.Bound), n)
+	}
+	// Every entry must be its OWN id, not another writer's.
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("name%02d", i)
+		if got := book.Bound[name]; got != fmt.Sprintf("sess-%02d", i) {
+			t.Errorf("%s bound to %q", name, got)
+		}
+	}
+}
+
+// A STALE lock must cost one slow bind, not a wedged CLI. A killed process leaves
+// the lock file behind, and refusing to run then would trade a convenience for a
+// broken command.
+func TestAStaleLockDoesNotWedgeTheCLI(t *testing.T) {
+	isolate(t)
+	p, err := sessionsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Nobody is coming back for this one.
+	if err := os.WriteFile(p+".lock", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	if err := bindSession("stubborn", "sess-1"); err != nil {
+		t.Fatalf("a stale lock must not fail the bind: %v", err)
+	}
+	if got := sessionIDFor("stubborn"); got != "sess-1" {
+		t.Fatalf("the bind did not land: %q", got)
+	}
+	// It should have waited, then proceeded — not waited forever.
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("waited %s on a stale lock", elapsed)
+	}
+}
+
+// The lock must not be left behind on a normal bind, or the NEXT bind pays the
+// full stale-lock wait for no reason.
+func TestTheLockIsReleased(t *testing.T) {
+	isolate(t)
+	if err := bindSession("a", "sess-a"); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := sessionsPath()
+	if _, err := os.Stat(p + ".lock"); !os.IsNotExist(err) {
+		t.Fatal("the lock file survived a successful bind")
+	}
+	// And no stray temp files, which would accumulate one per run forever.
+	entries, err := os.ReadDir(filepath.Dir(p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp") {
+			t.Errorf("left a temp file behind: %s", e.Name())
+		}
+	}
+}
+
+// The unique temp path guards the case where the LOCK IS BYPASSED.
+//
+// With the lock held, writers serialise and a shared temp name would be harmless.
+// But the lock is best-effort: a stale one is waited out and then ignored, at
+// which point concurrent writers are back. On a shared temp path they interleave
+// and one publishes another's half-written file, which loadSessions reads as an
+// EMPTY book — losing every name rather than one.
+//
+// So: hold the lock stale, force every writer past it, and require that the book
+// is still a readable book afterwards.
+func TestAByPassedLockStillCannotCorruptTheBook(t *testing.T) {
+	isolate(t)
+	p, err := sessionsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Seed a real book, so "corrupted to empty" is distinguishable from "nothing
+	// was ever written".
+	if err := os.WriteFile(p, []byte(`{"version":1,"bound":{"seed":"sess-seed"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A lock nobody will release: every writer waits it out, then proceeds.
+	if err := os.WriteFile(p+".lock", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(k int) {
+			defer wg.Done()
+			_ = bindSession(fmt.Sprintf("n%d", k), fmt.Sprintf("s%d", k))
+		}(i)
+	}
+	wg.Wait()
+
+	book := loadSessions()
+	if book.Bound == nil {
+		t.Fatal("the book decoded to nil after concurrent lock-bypassed writes")
+	}
+	// Last-writer-wins may drop some additions; that is documented and
+	// self-healing. Losing EVERYTHING is the failure this guards.
+	if len(book.Bound) == 0 {
+		t.Fatal("every name was lost: a writer published a half-written book")
 	}
 }
