@@ -127,10 +127,15 @@ func runSites(args []string) int {
 		return 0
 	}
 	if len(sites) == 0 {
-		// An empty catalog is the state a brand-new account is IN, so say what to
-		// do next rather than printing nothing and looking broken.
-		fmt.Println("No sites available yet.")
-		fmt.Println("Map one to get started:  rindler map https://example.com")
+		// Say precisely what is empty. This endpoint lists the configs YOU have
+		// published, not the workspace's shared sites and not the platform
+		// catalog, so "no sites available" was a claim about the account that
+		// this response cannot support -- and it reads as "Rindler has nothing
+		// for you" to someone whose workspace has plenty.
+		fmt.Println("You have not mapped any sites yet.")
+		fmt.Println("This lists your own mapped sites; sites shared with your")
+		fmt.Println("workspace are on the dashboard.")
+		fmt.Println("\nMap one:  rindler map https://example.com")
 		return 0
 	}
 	sort.Slice(sites, func(i, j int) bool { return sites[i].Domain < sites[j].Domain })

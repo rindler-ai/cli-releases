@@ -37,6 +37,19 @@ const (
 	relayKeepalive = 20 * time.Second
 )
 
+// relayRefusedError is the server ANSWERING that it will not accept this
+// device, as opposed to the connection failing. The distinction decides
+// whether reconnecting can possibly help.
+type relayRefusedError struct{ reason string }
+
+func (e *relayRefusedError) Error() string { return "server refused this device: " + e.reason }
+
+// relayMaxRefusals is how many consecutive refusals to absorb before giving up.
+// More than one because a transient server fault can look like a refusal; few
+// enough that a genuinely revoked device stops within a minute or so instead of
+// retrying for the life of the process.
+const relayMaxRefusals = 3
+
 // runRelay connects and serves until ctx is cancelled, reconnecting with backoff.
 // A dropped socket is normal (laptop sleeps, networks move); the loop treats it
 // as such rather than exiting, because a relay that quietly stops is a login
@@ -54,6 +67,7 @@ func runRelay(ctx context.Context, verbose bool) error {
 	}
 
 	backoff := relayReconnectMin
+	refusals := 0
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -62,6 +76,28 @@ func runRelay(ctx context.Context, verbose bool) error {
 		if ctx.Err() != nil {
 			return nil
 		}
+
+		// A REFUSAL is not a dropped connection. Being told "this device is not
+		// recognised" is an answer, and reconnecting cannot change it -- a device
+		// revoked from the dashboard used to sit here retrying forever, and
+		// because the disconnect line only prints under --verbose, in silence.
+		//
+		// Not on the first one, though: a server-side blip can render as a
+		// refusal too, and giving up instantly on a transient fault would take
+		// the device offline for a problem that fixes itself.
+		var refused *relayRefusedError
+		if errors.As(err, &refused) {
+			refusals++
+			if refusals >= relayMaxRefusals {
+				return fmt.Errorf(
+					"the server refused this device %d times in a row (%s).\n"+
+						"It is probably no longer registered — re-pair it with `rindler vault disable` then `rindler vault enable`",
+					refusals, refused.reason)
+			}
+		} else {
+			refusals = 0
+		}
+
 		if verbose && err != nil {
 			fmt.Fprintf(os.Stderr, "relay: disconnected (%v); reconnecting in %s\n", err, backoff)
 		}
@@ -99,7 +135,7 @@ func relaySession(ctx context.Context, d deviceIdentity, verbose bool) error {
 		return fmt.Errorf("hello reply: %w", err)
 	}
 	if ack.Type != "hello_ok" || ack.Error != "" {
-		return fmt.Errorf("server refused this device: %s", firstNonEmpty(ack.Error, ack.Type))
+		return &relayRefusedError{reason: firstNonEmpty(ack.Error, ack.Type)}
 	}
 	if verbose {
 		fmt.Fprintf(os.Stderr, "relay: connected as device %s\n", ack.DeviceID)
