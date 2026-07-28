@@ -29,6 +29,13 @@ import (
 // how a hardcoded "0.1.0" would keep being reported by every later tag.
 var version = "dev"
 
+// installURL is the one-liner that installs or reinstalls this binary. It is a
+// named constant so that a message telling someone to reinstall cannot drift
+// from the command that actually does it -- an earlier draft pointed at
+// an "upgrade" verb this CLI has never had, which is worse than saying
+// nothing: it reads as an instruction and dead-ends.
+const installURL = "https://rindler.ai/cli"
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }

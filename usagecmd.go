@@ -140,8 +140,10 @@ func runUsage(args []string) int {
 	// all-zero struct, and printing that is worse than printing nothing: it
 	// looks like an answer.
 	if !envelopeLooksReal(u) {
-		fmt.Fprintln(os.Stderr,
-			"usage: the server's response is missing its window; this CLI is likely older than the API. Update with `rindler upgrade`.")
+		fmt.Fprintf(os.Stderr,
+			"usage: the server's response is not the shape this CLI (%s) reads, so there are no numbers to show.\n"+
+				"Reinstall to get a build that matches the API:\n  curl %s | sh\n",
+			version, installURL)
 		return 1
 	}
 
