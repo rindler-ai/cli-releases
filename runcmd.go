@@ -153,6 +153,7 @@ func runRun(args []string) int {
 	fs.Var(&inputs, "input", "action input as key=value (repeatable)")
 	site := fs.String("site", "", "site domain or URL to run against")
 	mode := fs.String("mode", "", "optional run mode passed through to the server")
+	limit := fs.Int("limit", 0, "max records for a list action (0 = the site's default)")
 	apiBaseFlag := fs.String("api-base", "", "Rindler API origin (defaults to the one you logged in against)")
 	timeout := fs.Duration("timeout", 15*time.Minute, "how long to follow the run")
 	noWait := fs.Bool("no-wait", false, "start the run and print the job id instead of following it")
@@ -184,7 +185,7 @@ func runRun(args []string) int {
 	defer cancel()
 	httpc := defaultHTTPClient()
 
-	jobID, err := startRun(ctx, httpc, apiBase, key, host, actions, inputMap, *mode)
+	jobID, err := startRun(ctx, httpc, apiBase, key, host, actions, inputMap, *mode, *limit)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "run:", err)
 		return 1
@@ -308,7 +309,7 @@ func verbError(verb string, code int, body string) error {
 
 func startRun(
 	ctx context.Context, httpc *http.Client, apiBase, key, site string,
-	actions []string, inputs map[string]string, mode string,
+	actions []string, inputs map[string]string, mode string, limit int,
 ) (string, error) {
 	payload := map[string]any{
 		"site":            site,
@@ -320,6 +321,12 @@ func startRun(
 	}
 	if strings.TrimSpace(mode) != "" {
 		payload["mode"] = mode
+	}
+	// Only when the caller asked. 0 means "unset" server-side and keeps the
+	// site's own cap, so sending it explicitly would be indistinguishable from
+	// asking for zero records.
+	if limit > 0 {
+		payload["limit"] = limit
 	}
 	b, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+"/v1/runtime/run", bytes.NewReader(b))
@@ -449,7 +456,7 @@ func printRunResult(w io.Writer, env runJobEnvelope) {
 	}
 	fmt.Fprintf(w, "  records: %d\n", n)
 	if env.Outputs != nil && env.Outputs.Truncated {
-		fmt.Fprintln(w, "  note: the record set was truncated (raise --limit server-side or narrow the query)")
+		fmt.Fprintln(w, "  note: the record set was truncated; raise it with --limit, or narrow the query")
 	}
 	for i, rec := range recordsOf(env) {
 		if i >= 20 {

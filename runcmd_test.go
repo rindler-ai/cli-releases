@@ -87,7 +87,7 @@ func TestStartRunSendsContract(t *testing.T) {
 	defer srv.Close()
 
 	id, err := startRun(context.Background(), srv.Client(), srv.URL, "k", "example.com",
-		[]string{"search_products"}, map[string]string{"query": "shoes"}, "")
+		[]string{"search_products"}, map[string]string{"query": "shoes"}, "", 0)
 	if err != nil {
 		t.Fatalf("startRun errored: %v", err)
 	}

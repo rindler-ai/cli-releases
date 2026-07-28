@@ -97,7 +97,7 @@ func usage(w *os.File) {
 Usage:
   rindler login [--paste] [--no-map] [--no-mcp]  Sign in with Clerk, mint a session-bound MCP key,
                                                  and install the MCP into Claude Code + Codex
-  rindler run --site <d> --action <a>            Run actions against a site and follow the job
+  rindler run --site <d> --action <a> [--limit N] Run actions against a site and follow the job
   rindler run status <job-id> [--once]          Follow a run you already started
   rindler sites                                  List the sites you can act on
   rindler actions <site>                         Show a site's actions and their inputs

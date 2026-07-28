@@ -105,6 +105,11 @@ func runDeviceList(args []string) int {
 			ClientKind string `json:"client_kind"`
 			Status     string `json:"status"`
 			LastSeenAt string `json:"last_seen_at"`
+			// Connected is the LIVE relay truth: true iff the device holds a
+			// socket that would answer a ping right now. A *bool, not a bool,
+			// because the server OMITS it when the hub probe is unwired -- and a
+			// missing field decoding to false would report every device offline.
+			Connected *bool `json:"connected,omitempty"`
 		} `json:"devices"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
@@ -127,7 +132,8 @@ func runDeviceList(args []string) int {
 		if d.ID != "" && d.ID == mine.DeviceID {
 			name += "  (this machine)"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", name, kind, d.Platform, d.Status, d.LastSeenAt)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", name, kind, d.Platform,
+			deviceStatusLabel(d.Status, d.Connected), d.LastSeenAt)
 	}
 	w.Flush()
 	return 0
@@ -164,4 +170,30 @@ func runDeviceServe(args []string) int {
 		fmt.Println("\nStopped serving.")
 	}
 	return 0
+}
+
+// deviceStatusLabel answers the question someone actually runs this command to
+// ask: can this device serve a login right now?
+//
+// `status` alone cannot say. It is the REGISTRATION state -- active means
+// enrolled and not revoked -- so a machine that is asleep, or whose relay is
+// not running, still reads "active". Someone debugging why a login reported no
+// credential would see a healthy row for the device that was not there.
+//
+// `connected` is the live socket truth, and is deliberately nullable: the
+// server omits it when the hub probe is unwired. A nil is "unknown", NOT
+// offline, so it stays out of the way rather than declaring every device dead
+// on a lane that cannot report.
+func deviceStatusLabel(status string, connected *bool) string {
+	if status != "active" {
+		return status
+	}
+	switch {
+	case connected == nil:
+		return "active"
+	case *connected:
+		return "active, connected"
+	default:
+		return "active, not connected"
+	}
 }
