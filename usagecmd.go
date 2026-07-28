@@ -38,14 +38,33 @@ const (
 	alsoVisibleNote          = "Owners and admins can see these same numbers."
 )
 
-// usageRow mirrors the server's memberUsageRow.
+// usageRow mirrors the server's per-member row, INCLUDING its outcome
+// vocabulary. An earlier version of this struct declared six of the eleven
+// fields and silently dropped the rest -- the same under-transcription that
+// zeroed this whole command once already.
+//
+// The outcome fields are the ones worth having. "successes" counts calls that
+// did not error; "completed" counts calls that actually finished the work, and
+// "handed_off" counts the ones that stopped for an auth wall or a captcha --
+// which for a CLI user is the difference between "it is broken" and "it needs
+// you".
 type usageRow struct {
-	Actor       string  `json:"actor"`
-	Actions     int64   `json:"actions"`
-	Successes   int64   `json:"successes"`
-	Blocked     int64   `json:"blocked"`
-	SuccessRate float64 `json:"success_rate"`
-	Credits     int64   `json:"credits"`
+	Actor     string `json:"actor"`
+	Actions   int64  `json:"actions"`
+	Successes int64  `json:"successes"`
+	Blocked   int64  `json:"blocked"`
+
+	Completed    int64 `json:"completed"`
+	HandedOff    int64 `json:"handed_off"`
+	Failed       int64 `json:"failed"`
+	Unclassified int64 `json:"unclassified"`
+
+	// SuccessRate is completed / (completed + failed) -- NOT successes/actions.
+	// Printing it next to `successes` implied the two were one measurement; they
+	// are not, and the pairing overstated the rate whenever work was handed off.
+	SuccessRate  float64 `json:"success_rate"`
+	Credits      int64   `json:"credits"`
+	LastActiveAt string  `json:"last_active_at,omitempty"`
 }
 
 // usageTotals mirrors the server's memberUsageTotals: the sum over EVERY row,
@@ -271,12 +290,35 @@ func printUsage(w io.Writer, u usageResponse, scope string) {
 		fmt.Fprintf(w, "%s\n\n", heading)
 	}
 
-	fmt.Fprintf(w, "  actions   %d\n", row.Actions)
-	fmt.Fprintf(w, "  succeeded %d (%.0f%%)\n", row.Successes, row.SuccessRate*100)
+	fmt.Fprintf(w, "  actions      %d\n", row.Actions)
+	// The outcome vocabulary, in the order a reader cares about. The rate belongs
+	// to `completed`, since that is what it is derived from.
+	// The rate is the server's, derived from completed/(completed+failed). It is
+	// printed against `completed` because that is its numerator -- putting it
+	// beside `successes`, as this once did, paired two different measurements.
+	fmt.Fprintf(w, "  completed    %d (%.0f%% success rate)\n",
+		row.Completed, row.SuccessRate*100)
+	if row.HandedOff > 0 {
+		// The one people most need: not broken, waiting on a human.
+		fmt.Fprintf(w, "  handed back  %d (an auth wall or captcha needed you)\n", row.HandedOff)
+	}
+	if row.Failed > 0 {
+		fmt.Fprintf(w, "  failed       %d\n", row.Failed)
+	}
 	// Blocked is not a failure: it is the rules doing their job. Naming it that
 	// way stops a healthy number from reading like an outage.
-	fmt.Fprintf(w, "  blocked   %d (by your rules)\n", row.Blocked)
-	fmt.Fprintf(w, "  credits   %d spent\n", row.Credits)
+	if row.Blocked > 0 {
+		fmt.Fprintf(w, "  blocked      %d (by your rules)\n", row.Blocked)
+	}
+	if row.Unclassified > 0 {
+		// Named rather than folded into a bucket it does not belong to: these
+		// predate the classifier and we genuinely do not know how they ended.
+		fmt.Fprintf(w, "  unclassified %d (ran before outcomes were recorded)\n", row.Unclassified)
+	}
+	fmt.Fprintf(w, "  credits      %d spent\n", row.Credits)
+	if scope == scopeMe && row.LastActiveAt != "" {
+		fmt.Fprintf(w, "  last active  %s\n", dayOf(row.LastActiveAt))
+	}
 
 	// A member whose personal figure is small is owed the reason: work that ran
 	// under no attributable actor lands here rather than vanishing.

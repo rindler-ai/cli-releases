@@ -17,7 +17,9 @@ const realServerBody = `{
   "window_days": 30,
   "start_at": "2026-06-27T00:00:00Z",
   "end_at": "2026-07-27T00:00:00Z",
-  "mine": {"actor":"you","actions":412,"successes":389,"blocked":23,"success_rate":0.9442,"credits":57},
+  "mine": {"actor":"you","actions":412,"successes":389,"blocked":23,
+           "completed":370,"handed_off":30,"failed":12,"unclassified":0,
+           "success_rate":0.9442,"credits":57,"last_active_at":"2026-07-27T09:00:00Z"},
   "workspace_totals": {"actions":9130,"successes":8402,"blocked":728,"credits":1244},
   "unattributed": {"actor":"unattributed","actions":88,"successes":80,"blocked":8,"success_rate":0.909,"credits":11},
   "credits_reconstructed": true,
@@ -84,10 +86,27 @@ func TestUsagePrintsYourRealNumbers(t *testing.T) {
 	var b strings.Builder
 	printUsage(&b, u, scopeMe)
 	out := b.String()
-	for _, want := range []string{"412", "389", "94%", "23", "57", "88", "9130"} {
+	// The OUTCOME vocabulary, not raw successes. `successes` counts calls that
+	// did not error; `completed` counts calls that finished the work, and the
+	// rate is derived from completed/(completed+failed) -- so printing the rate
+	// beside `successes` paired two different measurements and overstated the
+	// rate whenever work was handed off.
+	for _, want := range []string{
+		"412",  // actions
+		"370",  // completed
+		"94%",  // the rate, which belongs to completed
+		"30",   // handed back — the auth-wall bucket a CLI user needs
+		"12",   // failed
+		"57",   // credits
+		"88",   // the unattributed remainder
+		"9130", // the workspace total, for context
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output is missing %q\n---\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "succeeded 389") {
+		t.Error("successes must not be printed beside a rate derived from completed/failed")
 	}
 	if strings.Contains(out, "Workspace usage") {
 		t.Error("the personal view must not be headed as the workspace view")
@@ -208,5 +227,69 @@ func TestDayOfTrimsOnlyRealTimestamps(t *testing.T) {
 		if got := dayOf(s); got != s {
 			t.Errorf("dayOf(%q) = %q, want passthrough", s, got)
 		}
+	}
+}
+
+// The outcome fields must actually DECODE. Under-transcribing this struct is
+// how this command shipped a fully zeroed report once already, and five of
+// these fields were missing from the second version too.
+func TestEveryOutcomeFieldDecodes(t *testing.T) {
+	var u usageResponse
+	if err := json.Unmarshal([]byte(realServerBody), &u); err != nil {
+		t.Fatal(err)
+	}
+	for name, got := range map[string]int64{
+		"completed":  u.Mine.Completed,
+		"handed_off": u.Mine.HandedOff,
+		"failed":     u.Mine.Failed,
+	} {
+		if got == 0 {
+			t.Errorf("%s decoded to 0; the field is missing from the struct", name)
+		}
+	}
+	if u.Mine.LastActiveAt == "" {
+		t.Error("last_active_at decoded empty")
+	}
+}
+
+// handed_off is the bucket that changes what a reader DOES: the work is not
+// broken, it is waiting on them. It must be named as such, not folded into
+// failures.
+func TestHandedOffIsNotReportedAsFailure(t *testing.T) {
+	var u usageResponse
+	_ = json.Unmarshal([]byte(realServerBody), &u)
+	var b strings.Builder
+	printUsage(&b, u, scopeMe)
+	out := b.String()
+	if !strings.Contains(out, "handed back") {
+		t.Errorf("the handed-off bucket is not surfaced:\n%s", out)
+	}
+	if !strings.Contains(out, "needed you") {
+		t.Errorf("the reader is not told handed-off means it needs them:\n%s", out)
+	}
+}
+
+// Zero-valued buckets stay off the page: a row of zeros reads as breakage.
+func TestEmptyBucketsAreOmitted(t *testing.T) {
+	clean := `{"window_days":30,"start_at":"2026-06-27T00:00:00Z","end_at":"2026-07-27T00:00:00Z",
+	           "mine":{"actor":"you","actions":10,"completed":10,"handed_off":0,"failed":0,
+	                   "blocked":0,"unclassified":0,"success_rate":1,"credits":3},
+	           "workspace_totals":{"actions":10,"successes":10,"blocked":0,"credits":3},
+	           "unattributed":{"actor":"unattributed","actions":0},
+	           "credits_reconstructed":true,"visible_to_admins":true}`
+	var u usageResponse
+	if err := json.Unmarshal([]byte(clean), &u); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	printUsage(&b, u, scopeMe)
+	out := b.String()
+	for _, absent := range []string{"handed back", "failed", "blocked", "unclassified"} {
+		if strings.Contains(out, absent) {
+			t.Errorf("a clean run still printed %q:\n%s", absent, out)
+		}
+	}
+	if !strings.Contains(out, "completed    10") {
+		t.Errorf("the completed count is missing:\n%s", out)
 	}
 }
