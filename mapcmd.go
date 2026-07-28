@@ -39,14 +39,47 @@ type mapStatusResponse struct {
 }
 
 // mapTerminal reports whether a status string ends the run, and whether it won.
+// mapTerminal decides when to stop polling. Its terminal set MIRRORS the
+// server's mappingStatusTerminal (api/tracked_sites.go), and must keep
+// mirroring it, because a status the server considers finished but this
+// function does not is a poll that never ends: the job is already over, so the
+// status will never change again, and we sit there until --timeout and then
+// report a timeout that did not happen.
+//
+// Two were missing, both genuinely terminal server-side:
+//
+//	expired           the request exceeded its maximum age and was finalized
+//	needs_escalation  an operator step is pending; work has STOPPED, and the
+//	                  server's own comment records this exact disagreement
+//	                  stranding jobs once already
+//
+// Unknown statuses stay non-terminal on purpose: a new intermediate state
+// should be waited through, not guessed at. That is safe only because the
+// caller bounds the wait, which is why this returns "keep going" rather than
+// looping itself.
 func mapTerminal(status string) (done bool, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "complete", "completed", "success", "succeeded", "done":
 		return true, true
-	case "error", "failed", "failure", "cancelled", "canceled", "timeout":
+	case "error", "failed", "failure", "expired", "needs_escalation",
+		"cancelled", "canceled", "timeout":
 		return true, false
 	default:
 		return false, false
+	}
+}
+
+// mapStatusExplanation gives a terminal failure a reason a reader can act on.
+// "failed" alone sends someone hunting for a bug in their own URL when the
+// truth is that the job aged out or is sitting in a human queue.
+func mapStatusExplanation(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "expired":
+		return "the mapping request aged out before it finished; re-run it"
+	case "needs_escalation":
+		return "this site needs a person to look at it; the mapping did not finish on its own"
+	default:
+		return ""
 	}
 }
 
@@ -266,7 +299,21 @@ func followMap(ctx context.Context, httpc *http.Client, apiBase, key, jobID stri
 				fmt.Printf("\n✓ Mapped %s.\n", domain)
 				return 0
 			}
-			fmt.Fprintf(os.Stderr, "\n✗ Mapping failed: %s\n", strings.TrimSpace(st.Message))
+			reason := strings.TrimSpace(st.Message)
+			// An aged-out or escalated job is not a mapping that "failed" in the
+			// sense the reader will assume, and the server does not always send a
+			// message. Without this they go looking for a mistake in their own URL.
+			if why := mapStatusExplanation(st.Status); why != "" {
+				if reason == "" {
+					reason = why
+				} else {
+					reason += " (" + why + ")"
+				}
+			}
+			if reason == "" {
+				reason = st.Status
+			}
+			fmt.Fprintf(os.Stderr, "\n✗ Mapping failed: %s\n", reason)
 			return 1
 		}
 		select {

@@ -84,11 +84,16 @@ type runJobEnvelope struct {
 // runTerminal classifies a job status. An UNRECOGNISED status is deliberately
 // non-terminal: treating an unknown value as done would end the poll early and
 // report whatever partial state happened to be there as the answer.
+// runTerminal decides when to stop polling a run. Same contract, and same
+// hazard, as mapTerminal: a status the server treats as finished but this does
+// not is an infinite poll, because a finished job's status never changes again.
+// "needs_escalation" is terminal server-side and was missing here too.
 func runTerminal(status string) (done bool, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "complete", "completed", "succeeded", "success":
 		return true, true
-	case "failed", "error", "cancelled", "canceled", "timeout", "timed_out":
+	case "failed", "error", "expired", "needs_escalation",
+		"cancelled", "canceled", "timeout", "timed_out":
 		return true, false
 	default:
 		return false, false
