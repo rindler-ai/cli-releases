@@ -59,9 +59,18 @@ type usageRow struct {
 	Failed       int64 `json:"failed"`
 	Unclassified int64 `json:"unclassified"`
 
-	// SuccessRate is completed / (completed + failed) -- NOT successes/actions.
-	// Printing it next to `successes` implied the two were one measurement; they
-	// are not, and the pairing overstated the rate whenever work was handed off.
+	// SuccessRate is completed / (completed + failed), ALREADY EXPRESSED AS A
+	// PERCENTAGE: the server's outcomeCompletionRate returns
+	// completed/resolved*100, rounded to one decimal, and its own test asserts
+	// "a percentage, not a fraction".
+	//
+	// This CLI multiplied it by 100 again, so a real 94.4 rendered as 9440%. The
+	// fixture said 0.9442 -- invented rather than transcribed -- so every test
+	// agreed with the mistake. Shipped in v0.4.0 through v0.7.1.
+	//
+	// It is also NOT successes/actions: printing it beside `successes` implied the
+	// two were one measurement, and overstated the rate whenever work was handed
+	// off.
 	SuccessRate  float64 `json:"success_rate"`
 	Credits      int64   `json:"credits"`
 	LastActiveAt string  `json:"last_active_at,omitempty"`
@@ -353,7 +362,7 @@ func printUsage(w io.Writer, u usageResponse, scope string) {
 	// printed against `completed` because that is its numerator -- putting it
 	// beside `successes`, as this once did, paired two different measurements.
 	fmt.Fprintf(w, "  completed    %d (%.0f%% success rate)\n",
-		row.Completed, row.SuccessRate*100)
+		row.Completed, row.SuccessRate)
 	if row.HandedOff > 0 {
 		// The one people most need: not broken, waiting on a human.
 		fmt.Fprintf(w, "  handed back  %d (an auth wall or captcha needed you)\n", row.HandedOff)
@@ -415,11 +424,15 @@ func dayOf(ts string) string {
 	return ts
 }
 
+// rate derives a workspace success rate in the SAME UNITS the server uses for
+// the per-member one: a percentage, not a fraction. Returning a fraction here
+// while the server returns a percentage would make the personal and workspace
+// views of one measurement disagree by a factor of 100.
 func rate(successes, actions int64) float64 {
 	if actions <= 0 {
 		return 0
 	}
-	return float64(successes) / float64(actions)
+	return float64(successes) / float64(actions) * 100
 }
 
 // printBurn reports the spend rate and how long the balance lasts at it.

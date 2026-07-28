@@ -9,7 +9,7 @@ import (
 const shapeBody = `{
   "window_days":30,"start_at":"2026-06-28T00:00:00Z","end_at":"2026-07-28T00:00:00Z",
   "mine":{"actor":"you","actions":412,"completed":370,"handed_off":30,"failed":12,
-          "blocked":23,"success_rate":0.9686,"credits":57},
+          "blocked":23,"success_rate":96.9,"credits":57},
   "workspace_totals":{"actions":9130,"successes":8402,"blocked":728,"credits":1244},
   "unattributed":{"actor":"unattributed","actions":88},
   "sessions":{"sessions":41,"median_ms":8400,"p90_ms":94000},

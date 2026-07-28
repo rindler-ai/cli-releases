@@ -19,9 +19,9 @@ const realServerBody = `{
   "end_at": "2026-07-27T00:00:00Z",
   "mine": {"actor":"you","actions":412,"successes":389,"blocked":23,
            "completed":370,"handed_off":30,"failed":12,"unclassified":0,
-           "success_rate":0.9442,"credits":57,"last_active_at":"2026-07-27T09:00:00Z"},
+           "success_rate":96.9,"credits":57,"last_active_at":"2026-07-27T09:00:00Z"},
   "workspace_totals": {"actions":9130,"successes":8402,"blocked":728,"credits":1244},
-  "unattributed": {"actor":"unattributed","actions":88,"successes":80,"blocked":8,"success_rate":0.909,"credits":11},
+  "unattributed": {"actor":"unattributed","actions":88,"successes":80,"blocked":8,"success_rate":90.9,"credits":11},
   "credits_reconstructed": true,
   "visible_to_admins": true
 }`
@@ -94,7 +94,7 @@ func TestUsagePrintsYourRealNumbers(t *testing.T) {
 	for _, want := range []string{
 		"412",  // actions
 		"370",  // completed
-		"94%",  // the rate, which belongs to completed
+		"97%",  // the rate, which belongs to completed AND arrives as a percentage
 		"30",   // handed back — the auth-wall bucket a CLI user needs
 		"12",   // failed
 		"57",   // credits
@@ -214,8 +214,11 @@ func TestRateIsSafeAtZero(t *testing.T) {
 	if got := rate(0, 0); got != 0 {
 		t.Fatalf("rate(0,0) = %v, want 0 (no divide by zero)", got)
 	}
-	if got := rate(5, 10); got != 0.5 {
-		t.Fatalf("rate(5,10) = %v, want 0.5", got)
+	// A PERCENTAGE, matching the units the server uses for the per-member rate.
+	// A fraction here would make the personal and workspace views of one
+	// measurement disagree by a factor of 100.
+	if got := rate(5, 10); got != 50 {
+		t.Fatalf("rate(5,10) = %v, want 50 (a percentage, not a fraction)", got)
 	}
 }
 
@@ -274,7 +277,7 @@ func TestHandedOffIsNotReportedAsFailure(t *testing.T) {
 func TestEmptyBucketsAreOmitted(t *testing.T) {
 	clean := `{"window_days":30,"start_at":"2026-06-27T00:00:00Z","end_at":"2026-07-27T00:00:00Z",
 	           "mine":{"actor":"you","actions":10,"completed":10,"handed_off":0,"failed":0,
-	                   "blocked":0,"unclassified":0,"success_rate":1,"credits":3},
+	                   "blocked":0,"unclassified":0,"success_rate":100,"credits":3},
 	           "workspace_totals":{"actions":10,"successes":10,"blocked":0,"credits":3},
 	           "unattributed":{"actor":"unattributed","actions":0},
 	           "credits_reconstructed":true,"visible_to_admins":true}`
@@ -292,5 +295,50 @@ func TestEmptyBucketsAreOmitted(t *testing.T) {
 	}
 	if !strings.Contains(out, "completed    10") {
 		t.Errorf("the completed count is missing:\n%s", out)
+	}
+}
+
+// success_rate ARRIVES AS A PERCENTAGE, and this is the third time an invented
+// fixture hid a units bug in this file.
+//
+// The server's outcomeCompletionRate returns completed/resolved*100 rounded to
+// one decimal, and its own test asserts "a percentage, not a fraction". This CLI
+// multiplied it by 100 again, so a real 94.4 printed as 9440% — shipped in v0.4.0
+// through v0.7.1, invisible because the fixture said 0.9442.
+//
+// Pinned with a realistic percentage and an assertion on the RENDERED output,
+// because the render is where the units error appeared.
+func TestTheSuccessRateIsTreatedAsAPercentage(t *testing.T) {
+	body := `{"window_days":30,"end_at":"2026-07-28T00:00:00Z",
+	          "mine":{"actor":"you","actions":412,"completed":370,"failed":12,
+	                  "success_rate":96.9,"credits":57},
+	          "workspace_totals":{"actions":9130,"successes":8402,"blocked":728,"credits":1244},
+	          "unattributed":{"actor":"unattributed","actions":0},
+	          "credits_reconstructed":true,"visible_to_admins":true}`
+	var u usageResponse
+	if err := json.Unmarshal([]byte(body), &u); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	printUsage(&b, u, scopeMe)
+	out := b.String()
+
+	if !strings.Contains(out, "97% success rate") {
+		t.Errorf("want 97%%, got:\n%s", out)
+	}
+	// The specific catastrophe: multiplying a percentage by 100 again.
+	for _, absurd := range []string{"9690%", "9440%", "969%"} {
+		if strings.Contains(out, absurd) {
+			t.Errorf("rendered %s — a percentage was multiplied by 100 again:\n%s", absurd, out)
+		}
+	}
+
+	// The workspace view derives its own rate and must use the SAME units, or one
+	// measurement reads differently at two scopes.
+	var wb strings.Builder
+	printUsage(&wb, u, scopeWorkspace)
+	// 8402/9130 = 92%.
+	if !strings.Contains(wb.String(), "92%") {
+		t.Errorf("the workspace rate is in different units:\n%s", wb.String())
 	}
 }
