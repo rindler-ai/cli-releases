@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -253,4 +255,65 @@ func TestGetJSONRawReturnsNoBodyOnFailure(t *testing.T) {
 	if raw != nil {
 		t.Errorf("a failed read returned %d bytes; --json would print an error body as data", len(raw))
 	}
+}
+
+// An empty list must not assert that nothing is mapped, because the response
+// cannot support that claim. The query behind it excludes an authed site whose
+// saved session has lapsed (ListPublishedSiteConfigsByUser filters on
+// expires_at > NOW()), so a user whose only site is an expired authed one gets an
+// empty list -- and was told they had never mapped anything.
+func TestAnEmptyListDoesNotClaimNothingIsMapped(t *testing.T) {
+	isolate(t)
+	t.Setenv("RINDLER_API_KEY", "rindler_live_test")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"configs":[]}`))
+	}))
+	defer srv.Close()
+
+	out := captureStdout(t, func() {
+		if code := runSites([]string{"--api-base", srv.URL}); code != 0 {
+			t.Errorf("sites exited %d on an empty list", code)
+		}
+	})
+	// Must not assert the account has nothing.
+	for _, forbidden := range []string{
+		"have not mapped any",
+		"No sites available",
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("claimed %q, which this response cannot support:\n%s", forbidden, out)
+		}
+	}
+	// Must name the two things it omits, so a puzzled reader can find their site.
+	for _, want := range []string{"workspace", "expired"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the message does not mention %q:\n%s", want, out)
+		}
+	}
+}
+
+// captureStdout runs fn with os.Stdout redirected and returns what it printed.
+// These commands print to stdout directly rather than to an injected writer, so
+// asserting on the OUTPUT -- which is the behaviour here, not the exit code --
+// means capturing it.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := os.Stdout
+	os.Stdout = w
+	done := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		_, _ = io.Copy(&b, r)
+		done <- b.String()
+	}()
+	fn()
+	os.Stdout = saved
+	_ = w.Close()
+	out := <-done
+	_ = r.Close()
+	return out
 }

@@ -149,10 +149,17 @@ func runSites(args []string) int {
 		// catalog, so "no sites available" was a claim about the account that
 		// this response cannot support -- and it reads as "Rindler has nothing
 		// for you" to someone whose workspace has plenty.
-		fmt.Println("You have not mapped any sites yet.")
-		fmt.Println("This lists your own mapped sites; sites shared with your")
-		fmt.Println("workspace are on the dashboard.")
-		fmt.Println("\nMap one:  rindler map https://example.com")
+		// Do not assert that nothing is mapped: this response cannot support it.
+		// The query also EXCLUDES an authed site whose saved session has lapsed
+		// (ListPublishedSiteConfigsByUser filters on expires_at > NOW()), so a
+		// user whose only site is an expired authed one gets an empty list and
+		// was told they had never mapped anything.
+		fmt.Println("Nothing here you can act on right now.")
+		fmt.Println("This lists your OWN mapped sites that are currently usable, so it")
+		fmt.Println("omits two things: sites shared with your workspace (on the")
+		fmt.Println("dashboard), and any site of yours whose saved login has expired.")
+		fmt.Println("\nMap one:      rindler map https://example.com")
+		fmt.Println("Expired login: re-add it with  rindler creds add <site>")
 		return 0
 	}
 	sort.Slice(sites, func(i, j int) bool { return sites[i].Domain < sites[j].Domain })
