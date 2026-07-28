@@ -87,11 +87,30 @@ type usageResponse struct {
 	// Mine is zeroed, not absent, when you have no recorded usage — a real zero
 	// a member is entitled to see, which is exactly why it cannot be used to
 	// detect a decode failure. That is envelopeLooksReal's job.
-	Mine                 usageRow    `json:"mine"`
-	WorkspaceTotals      usageTotals `json:"workspace_totals"`
-	Unattributed         usageRow    `json:"unattributed"`
-	CreditsReconstructed bool        `json:"credits_reconstructed"`
-	VisibleToAdmins      bool        `json:"visible_to_admins"`
+	Mine            usageRow    `json:"mine"`
+	WorkspaceTotals usageTotals `json:"workspace_totals"`
+	Unattributed    usageRow    `json:"unattributed"`
+	// Sessions, TopActions and FailureShapes are the caller's own shape. All
+	// three are OPTIONAL and separately failing server-side, so a nil is "not
+	// available", never "zero" -- and must be omitted rather than rendered.
+	Sessions *struct {
+		Sessions int64 `json:"sessions"`
+		MedianMs int64 `json:"median_ms"`
+		P90Ms    int64 `json:"p90_ms"`
+	} `json:"sessions,omitempty"`
+	TopActions []struct {
+		Action    string `json:"action"`
+		Calls     int64  `json:"calls"`
+		Succeeded int64  `json:"succeeded"`
+		Failed    int64  `json:"failed"`
+	} `json:"top_actions,omitempty"`
+	FailureShapes []struct {
+		Shape string `json:"shape"`
+		Calls int64  `json:"calls"`
+	} `json:"failure_shapes,omitempty"`
+
+	CreditsReconstructed bool `json:"credits_reconstructed"`
+	VisibleToAdmins      bool `json:"visible_to_admins"`
 }
 
 // envelopeLooksReal separates "the server answered, and you genuinely did
@@ -300,6 +319,7 @@ func runUsage(args []string) int {
 	credits := fetchCredits(ctx, apiBase, key)
 	printCredits(os.Stdout, credits)
 	printBurn(os.Stdout, u, credits)
+	printSelfShape(os.Stdout, u)
 	printDisclosures(os.Stdout, u)
 	return 0
 }
@@ -426,5 +446,52 @@ func printBurn(w io.Writer, u usageResponse, c *creditsResponse) {
 			return
 		}
 		fmt.Fprintf(w, "  runway   ~%d days at this rate\n", d)
+	}
+}
+
+// printSelfShape renders the caller's session timings, busiest actions and the
+// shapes their failures take. Every section is omitted when the server did not
+// send it: these are separately-failing extra reads, so absent means "could not
+// read", which must not be drawn as a zero.
+func printSelfShape(w io.Writer, u usageResponse) {
+	if u.Sessions == nil && len(u.TopActions) == 0 && len(u.FailureShapes) == 0 {
+		return
+	}
+	if s := u.Sessions; s != nil && s.Sessions > 0 {
+		fmt.Fprintf(w, "\n  sessions     %d (median %s, p90 %s)\n",
+			s.Sessions, humanMs(s.MedianMs), humanMs(s.P90Ms))
+	}
+	if len(u.TopActions) > 0 {
+		fmt.Fprintln(w, "\n  busiest actions")
+		for _, a := range u.TopActions {
+			line := fmt.Sprintf("    %-28s %d", a.Action, a.Calls)
+			if a.Failed > 0 {
+				line += fmt.Sprintf("  (%d failed)", a.Failed)
+			}
+			fmt.Fprintln(w, line)
+		}
+	}
+	if len(u.FailureShapes) > 0 {
+		// The shape is the actionable part: "12 failed" tells you nothing, "9 of
+		// them were bot walls" tells you what to do next.
+		fmt.Fprintln(w, "\n  how failures ended")
+		for _, f := range u.FailureShapes {
+			fmt.Fprintf(w, "    %-28s %d\n", f.Shape, f.Calls)
+		}
+	}
+}
+
+// humanMs renders a duration the way a reader thinks about it. Sub-second stays
+// in milliseconds; past a minute, seconds alone stop being readable.
+func humanMs(ms int64) string {
+	switch {
+	case ms <= 0:
+		return "0s"
+	case ms < 1000:
+		return fmt.Sprintf("%dms", ms)
+	case ms < 60_000:
+		return fmt.Sprintf("%.1fs", float64(ms)/1000)
+	default:
+		return fmt.Sprintf("%dm%ds", ms/60_000, (ms%60_000)/1000)
 	}
 }
