@@ -209,20 +209,29 @@ func pairDevice(ctx context.Context, httpc *http.Client, apiBase, sessionKey str
 // removed. Leaving a private key and device token behind on a machine the user
 // asked to sign out is the worse outcome; the stale row can be revoked from the
 // dashboard, but an un-erased key cannot be recalled.
+//
+// It must SAY SO, though. The response used to be discarded entirely, so a 401
+// or a 500 was indistinguishable from success and the caller went on to print
+// "unpaired and no longer reachable from the dashboard" -- while the device was
+// still listed there, still offered as a place to route a login, and now
+// permanently unable to answer one because its key was gone. A stale row is
+// tolerable; being told it is gone when it is not is not.
+//
+// The two failures are returned separately because they need opposite handling:
+// a serverRevokeError means the local state IS clean and the user has one
+// manual step left, while any other error means the erase itself did not
+// finish.
 func unpairDevice(ctx context.Context, httpc *http.Client) error {
 	d, err := loadDeviceIdentity()
 	if err != nil {
 		return nil // never paired; nothing to do
 	}
+
+	revokeErr := error(nil)
 	if d.APIBase != "" && d.DeviceToken != "" {
-		req, rerr := http.NewRequestWithContext(ctx, http.MethodPost, d.APIBase+"/devices/revoke-self", nil)
-		if rerr == nil {
-			req.Header.Set("Authorization", "Bearer "+d.DeviceToken)
-			if resp, derr := httpc.Do(req); derr == nil {
-				resp.Body.Close()
-			}
-		}
+		revokeErr = revokeDeviceServerSide(ctx, httpc, d)
 	}
+
 	p, perr := deviceIdentityPath()
 	if perr != nil {
 		return perr
@@ -230,7 +239,34 @@ func unpairDevice(ctx context.Context, httpc *http.Client) error {
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return nil
+	return revokeErr
+}
+
+// serverRevokeError means the local identity was erased but the server still
+// lists this device. Callers must not report a clean unpair on this.
+type serverRevokeError struct{ reason string }
+
+func (e *serverRevokeError) Error() string {
+	return "this machine is still listed on your dashboard (" + e.reason + ")"
+}
+
+func revokeDeviceServerSide(ctx context.Context, httpc *http.Client, d deviceIdentity) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.APIBase+"/devices/revoke-self", nil)
+	if err != nil {
+		return &serverRevokeError{reason: err.Error()}
+	}
+	req.Header.Set("Authorization", "Bearer "+d.DeviceToken)
+	resp, err := httpc.Do(req)
+	if err != nil {
+		return &serverRevokeError{reason: "could not reach the server"}
+	}
+	defer resp.Body.Close()
+	// 404 counts as revoked: the row is already gone, which is the outcome we
+	// wanted. Anything else left it standing.
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 || resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	return &serverRevokeError{reason: errBody(resp)}
 }
 
 // errBody renders a failed response for a human without dumping an unbounded

@@ -30,12 +30,106 @@ type mapStartResponse struct {
 	JobID string `json:"job_id"`
 }
 
+// mapStatusResponse mirrors what MapHandler.HandleStatus actually writes.
+//
+// The critical field is acceptance_state, and reading `status` without it is
+// the bug this struct was rewritten to fix: the server reports top-level
+// status "complete" for a mapping whose acceptance verdict was REJECTED,
+// BLOCKED, NOT_PROVEN or SUPERSEDED (durableMappingHTTPStatus). "Complete"
+// means the generation finished, not that the map is good. The verdict lives
+// in acceptance_state, and whether the config actually reached the catalog
+// lives in publication_state.
+//
+// Domain is top level. An earlier version of this struct read it from a nested
+// `envelope` object, which the status endpoint has never sent -- that shape is
+// the SITE-ENGINE's reply to the server, not the server's reply to us. So the
+// field was always empty and every success line said "the site". The nested
+// form is kept only as a fallback for the legacy no-durable-request lane.
 type mapStatusResponse struct {
-	Status   string `json:"status"`
-	Message  string `json:"message"`
-	Envelope struct {
+	Status           string `json:"status"`
+	Message          string `json:"message"`
+	Error            string `json:"error"`
+	Domain           string `json:"domain"`
+	AcceptanceState  string `json:"acceptance_state"`
+	PublicationState string `json:"publication_state"`
+	Envelope         struct {
 		Domain string `json:"domain"`
 	} `json:"envelope"`
+}
+
+// site names the mapped site, preferring the top-level field the server sends.
+func (s mapStatusResponse) site() string {
+	if d := strings.TrimSpace(s.Domain); d != "" {
+		return d
+	}
+	if d := strings.TrimSpace(s.Envelope.Domain); d != "" {
+		return d
+	}
+	return "the site"
+}
+
+// terminalAcceptanceStates are verdicts the acceptance lane will not revisit.
+// Transcribed from the dashboard's MapSitePanel, which is the reference
+// consumer of this same endpoint.
+var terminalAcceptanceStates = map[string]bool{
+	"rejected": true, "blocked": true, "budget_exhausted": true,
+	"unrepairable": true, "not_proven": true, "superseded": true,
+}
+
+// accepted reports whether a finished mapping is one you can actually use.
+//
+// A map is only a win when acceptance ACCEPTED it and publication put it in
+// the catalog. Anything else finished without publishing anything, so the next
+// `rindler run` against that site fails with "unsupported site" -- after we
+// told the user it worked.
+//
+// When the server sends no acceptance_state at all (the legacy lane, which has
+// no durable request behind it) there is no verdict to consult and a terminal
+// "complete" is the only signal there is. Treat that as success rather than
+// failing every caller on that lane.
+func (s mapStatusResponse) accepted() bool {
+	if strings.TrimSpace(s.AcceptanceState) == "" {
+		return true
+	}
+	if s.AcceptanceState != "accepted" {
+		return false
+	}
+	switch strings.TrimSpace(s.PublicationState) {
+	case "published", "not_applicable", "":
+		return true
+	default:
+		return false
+	}
+}
+
+// rejectionReason explains a finished-but-not-accepted map. The server already
+// puts the verifier's own text in `message` for the rejected verdicts, so
+// prefer that and fall back to naming the state.
+func (s mapStatusResponse) rejectionReason() string {
+	if m := strings.TrimSpace(s.Message); m != "" {
+		return m
+	}
+	if e := strings.TrimSpace(s.Error); e != "" {
+		return e
+	}
+	switch strings.TrimSpace(s.AcceptanceState) {
+	case "rejected":
+		return "the verifier rejected the mapping"
+	case "blocked":
+		return "the site blocked the mapping run"
+	case "not_proven":
+		return "the mapping could not be proven to work"
+	case "budget_exhausted":
+		return "the mapping ran out of budget before it could be proven"
+	case "unrepairable":
+		return "the mapping failed in a way the repair lane cannot fix"
+	case "superseded":
+		return "a newer mapping replaced this one"
+	case "":
+		return "the mapping did not finish successfully"
+	default:
+		return "the mapping ended as " + s.AcceptanceState
+	}
 }
 
 // mapTerminal reports whether a status string ends the run, and whether it won.
@@ -163,14 +257,10 @@ func runMap(args []string) int {
 		fmt.Fprintln(os.Stderr, "not logged in — run `rindler login` first (or set RINDLER_API_KEY)")
 		return 1
 	}
-	apiBase := *apiBaseFlag
-	if apiBase == "" {
-		apiBase = cfg.APIBase
-	}
-	if apiBase == "" {
-		apiBase = defaultAPIBase
-	}
-	apiBase = strings.TrimRight(apiBase, "/")
+	// Shared resolver, so RINDLER_API_BASE reaches this verb too. This was the
+	// THIRD hand-rolled copy of the precedence and, like the others, it skipped
+	// the env var straight to a production default.
+	apiBase := resolveAPIBase(*apiBaseFlag, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
@@ -236,8 +326,15 @@ func runMapStatus(args []string) int {
 			return 1
 		}
 		fmt.Println(strings.TrimSpace(st.Status + " " + st.Message))
-		if done, ok := mapTerminal(st.Status); done && !ok {
-			return 1
+		// Same verdict as the follow path. A one-shot check that disagreed with
+		// the thing it is a shortcut for would be worse than not having it.
+		if done, ok := mapTerminal(st.Status); done {
+			if !ok || !st.accepted() {
+				if ok {
+					fmt.Fprintf(os.Stderr, "not usable: %s\n", st.rejectionReason())
+				}
+				return 1
+			}
 		}
 		return 0
 	}
@@ -291,13 +388,18 @@ func followMap(ctx context.Context, httpc *http.Client, apiBase, key, jobID stri
 			last = line
 		}
 		if done, ok := mapTerminal(st.Status); done {
-			if ok {
-				domain := st.Envelope.Domain
-				if domain == "" {
-					domain = "the site"
-				}
-				fmt.Printf("\n✓ Mapped %s.\n", domain)
+			// "complete" is about the GENERATION, not the verdict. A rejected,
+			// blocked or unproven mapping also finishes "complete", and publishes
+			// nothing -- so claiming success here sends the user to a `rindler run`
+			// that fails with "unsupported site".
+			if ok && st.accepted() {
+				fmt.Printf("\n✓ Mapped %s.\n", st.site())
 				return 0
+			}
+			if ok {
+				fmt.Fprintf(os.Stderr, "\n✗ Mapping did not produce a usable config: %s\n",
+					st.rejectionReason())
+				return 1
 			}
 			reason := strings.TrimSpace(st.Message)
 			// An aged-out or escalated job is not a mapping that "failed" in the
