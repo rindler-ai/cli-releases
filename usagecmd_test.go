@@ -200,6 +200,7 @@ func TestUsagePrintsBothDisclosures(t *testing.T) {
 	}
 	var b strings.Builder
 	printUsage(&b, u, scopeMe)
+	printDisclosures(&b, u)
 	out := b.String()
 	if !strings.Contains(out, creditsReconstructedNote) {
 		t.Error("must disclose that per-member credits are reconstructed")

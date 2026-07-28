@@ -164,7 +164,40 @@ func creditBar(remaining, total int64) string {
 	return "[" + strings.Repeat("#", filled) + strings.Repeat("-", width-filled) + "]"
 }
 
+// burnRate is credits spent per day over the window. Derived here rather than
+// asked of the server because both inputs are already on the wire -- a new
+// endpoint for division would be a second place for the number to disagree.
+//
+// Returns 0 when it cannot be computed, and callers must treat that as "do not
+// print", never as "zero burn": a window with no spend and a window we cannot
+// measure look identical in the result and must not look identical on screen.
+func burnRate(creditsSpent int64, windowDays int) float64 {
+	if creditsSpent <= 0 || windowDays <= 0 {
+		return 0
+	}
+	return float64(creditsSpent) / float64(windowDays)
+}
+
+// daysLeft projects how long the remaining balance lasts at the observed burn.
+// Deliberately conservative about what it will claim:
+//
+//   - a zero or unknown burn yields 0 (no projection), because dividing by it
+//     would produce infinity and print a promise
+//   - it is capped, because "your credits last 9000 days" is noise, and a tiny
+//     burn over a short window extrapolates absurdly far
+func daysLeft(remaining int64, burn float64) int {
+	if burn <= 0 || remaining <= 0 {
+		return 0
+	}
+	d := int(float64(remaining) / burn)
+	if d > 999 {
+		return 999
+	}
+	return d
+}
+
 func printCredits(w io.Writer, c *creditsResponse) {
+	fmt.Fprintln(w)
 	if c == nil {
 		fmt.Fprintln(w, "  credits  (could not read your balance)")
 		return
@@ -264,7 +297,10 @@ func runUsage(args []string) int {
 	printUsage(os.Stdout, u, scope)
 	// Credits last and separately: it is a different read against a different
 	// endpoint, and one failing must not take the other's numbers down with it.
-	printCredits(os.Stdout, fetchCredits(ctx, apiBase, key))
+	credits := fetchCredits(ctx, apiBase, key)
+	printCredits(os.Stdout, credits)
+	printBurn(os.Stdout, u, credits)
+	printDisclosures(os.Stdout, u)
 	return 0
 }
 
@@ -330,6 +366,15 @@ func printUsage(w io.Writer, u usageResponse, scope string) {
 		fmt.Fprintf(w, "  Workspace total for the same window: %d actions.\n", u.WorkspaceTotals.Actions)
 	}
 
+}
+
+// printDisclosures closes the report. Separated from printUsage so the numbers
+// -- usage, then balance, then burn -- read as one block and the notes about
+// them come after, rather than being buried between two sets of figures.
+func printDisclosures(w io.Writer, u usageResponse) {
+	if !u.CreditsReconstructed && !u.VisibleToAdmins {
+		return
+	}
 	fmt.Fprintln(w)
 	if u.CreditsReconstructed {
 		fmt.Fprintf(w, "  %s\n", creditsReconstructedNote)
@@ -355,4 +400,31 @@ func rate(successes, actions int64) float64 {
 		return 0
 	}
 	return float64(successes) / float64(actions)
+}
+
+// printBurn reports the spend rate and how long the balance lasts at it.
+//
+// Both are derived from numbers already printed above, so they can only ever
+// restate what is on screen -- which is the point: a reader should be able to
+// check them. Anything it cannot compute honestly is omitted rather than
+// rendered as a zero.
+func printBurn(w io.Writer, u usageResponse, c *creditsResponse) {
+	burn := burnRate(u.Mine.Credits, u.WindowDays)
+	if burn <= 0 {
+		return
+	}
+	fmt.Fprintf(w, "  burn     %.1f credits/day over the last %d days\n", burn, u.WindowDays)
+
+	// A projection needs a balance we actually know. c.Credit.Known false means
+	// the server could not read it, which is not zero and cannot be projected.
+	if c == nil || c.Credit == nil || !c.Credit.Known {
+		return
+	}
+	if d := daysLeft(c.Credit.Remaining, burn); d > 0 {
+		if d >= 999 {
+			fmt.Fprintln(w, "  runway   999+ days at this rate")
+			return
+		}
+		fmt.Fprintf(w, "  runway   ~%d days at this rate\n", d)
+	}
 }
