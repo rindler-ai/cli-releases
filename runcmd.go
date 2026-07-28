@@ -81,10 +81,9 @@ type runJobEnvelope struct {
 	} `json:"error,omitempty"`
 }
 
-// runTerminal classifies a job status. An UNRECOGNISED status is deliberately
-// non-terminal: treating an unknown value as done would end the poll early and
-// report whatever partial state happened to be there as the answer.
-// runTerminal decides when to stop polling a run. Same contract, and same
+// runTerminal decides when to stop polling a run. An UNRECOGNISED status is
+// deliberately non-terminal: treating an unknown value as done would end the
+// poll early and report whatever partial state happened to be there. Same contract, and same
 // hazard, as mapTerminal: a status the server treats as finished but this does
 // not is an infinite poll, because a finished job's status never changes again.
 // "needs_escalation" is terminal server-side and was missing here too.
@@ -217,14 +216,35 @@ func resolveKeyAndBase(apiBaseFlag, verb string) (key, apiBase string, exitCode 
 		fmt.Fprintln(os.Stderr, "not logged in — run `rindler login` first (or set RINDLER_API_KEY)")
 		return "", "", 1
 	}
-	apiBase = apiBaseFlag
-	if apiBase == "" {
-		apiBase = cfg.APIBase
+	return key, resolveAPIBase(apiBaseFlag, cfg), 0
+}
+
+// resolveAPIBase picks the origin every authenticated command talks to:
+// --api-base, then RINDLER_API_BASE, then the origin recorded at login, then
+// the built-in default.
+//
+// It is ONE function because it used to be two, and they disagreed. The env
+// var was read by `login` alone, even though the help text advertises it as
+// "override the API origin" with no verb qualifier -- every other command
+// skipped from the flag straight to the config. That was worst exactly where
+// the variable is most used: in CI you set RINDLER_API_KEY and never log in,
+// so there is no config to fall back to, and the fallback is the PRODUCTION
+// default. The override was ignored and the commands quietly went to prod.
+//
+// Env beats config deliberately. The config is a leftover from whenever you
+// last logged in; an env var is something you set for this shell, now.
+func resolveAPIBase(flagValue string, cfg cliConfig) string {
+	for _, candidate := range []string{
+		flagValue,
+		os.Getenv("RINDLER_API_BASE"),
+		cfg.APIBase,
+		defaultAPIBase,
+	} {
+		if v := strings.TrimRight(strings.TrimSpace(candidate), "/"); v != "" {
+			return v
+		}
 	}
-	if apiBase == "" {
-		apiBase = defaultAPIBase
-	}
-	return key, strings.TrimRight(apiBase, "/"), 0
+	return defaultAPIBase
 }
 
 // runAuthError names what each refusal means. Run accepts any key, so a 403 here

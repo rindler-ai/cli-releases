@@ -220,12 +220,8 @@ func resolveKeyAndBaseQuiet(apiBaseFlag string) (key, apiBase string, exitCode i
 	if err != nil || key == "" {
 		return "", "", 1
 	}
-	apiBase = apiBaseFlag
-	if apiBase == "" {
-		apiBase = cfg.APIBase
-	}
-	if apiBase == "" {
-		apiBase = defaultAPIBase
-	}
-	return key, strings.TrimRight(apiBase, "/"), 0
+	// Same resolver as every other command, on purpose: a doctor that diagnosed
+	// a different origin than the one your commands use would confidently
+	// describe a lane you are not talking to.
+	return key, resolveAPIBase(apiBaseFlag, cfg), 0
 }
