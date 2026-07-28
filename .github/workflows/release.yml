@@ -48,16 +48,49 @@ jobs:
           done
           cd dist && sha256sum rindler-* > SHA256SUMS.txt && cat SHA256SUMS.txt
 
+      # Idempotent on purpose. `gh release create` hard-fails with "a release
+      # with the same tag name already exists", which turns two ordinary events
+      # into a red build: re-running the job for a tag (workflow_dispatch), and
+      # force-pushing a tag after a history rewrite. Neither is a failure worth
+      # paging on, and a red release job trains everyone to ignore this workflow
+      # -- which is the one that publishes the binaries users download.
+      #
+      # So: create when absent, re-upload when present. --clobber replaces the
+      # assets so the published binaries always match the tag's current source,
+      # which is exactly what you want after the tag has moved.
       - name: Publish release
         working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release create "$TAG" \
-            --repo "${{ github.repository }}" \
-            --title "rindler CLI $TAG" \
-            --notes "Rindler CLI ($TAG). Install: \`curl https://rindler.ai/cli | sh\`, then \`rindler login\`." \
-            rindler-linux-amd64 rindler-linux-arm64 \
-            rindler-darwin-amd64 rindler-darwin-arm64 \
-            SHA256SUMS.txt
+          assets="rindler-linux-amd64 rindler-linux-arm64 rindler-darwin-amd64 rindler-darwin-arm64 SHA256SUMS.txt"
+          notes="Rindler CLI ($TAG). Install: \`curl https://rindler.ai/cli | sh\`, then \`rindler login\`."
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "release $TAG exists; replacing its assets"
+            # shellcheck disable=SC2086
+            gh release upload "$TAG" --repo "$REPO" --clobber $assets
+          else
+            echo "creating release $TAG"
+            # shellcheck disable=SC2086
+            gh release create "$TAG" --repo "$REPO" \
+              --title "rindler CLI $TAG" --notes "$notes" $assets
+          fi
+
+      # The install script verifies SHA256SUMS.txt and fails closed, so a
+      # release whose checksums do not match its binaries is worse than no
+      # release: every install breaks. Prove it here, against what was actually
+      # published, rather than trusting the upload.
+      - name: Verify the published checksums
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p verify && cd verify
+          gh release download "$TAG" --repo "$REPO" --clobber \
+            -p 'rindler-*' -p 'SHA256SUMS.txt'
+          sha256sum -c SHA256SUMS.txt
+          echo "published checksums match the published binaries"
