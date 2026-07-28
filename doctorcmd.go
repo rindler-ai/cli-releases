@@ -56,7 +56,7 @@ func runDoctor(args []string) int {
 		return 2
 	}
 	cfg, _ := loadConfig()
-	checks := diagnose(cfg, *apiBaseFlag, os.Getenv("RINDLER_API_KEY") != "")
+	checks := diagnose(cfg, *apiBaseFlag, os.Getenv("RINDLER_API_KEY") != "", *offline)
 
 	// The live leg. Local checks prove a key EXISTS; only this proves the server
 	// still accepts it, which is the difference between "logged in" and "working".
@@ -91,7 +91,10 @@ func runDoctor(args []string) int {
 
 // diagnose is pure over its inputs plus the local agent config readers, so the
 // verdict logic is testable without a network or a real keyring.
-func diagnose(cfg cliConfig, apiBaseFlag string, envKey bool) []check {
+// offline tells diagnose whether the live probe will run. It changes one
+// verdict: without a live leg the mint-time expiry snapshot is the only
+// evidence there is, so it has to be the one that fails.
+func diagnose(cfg cliConfig, apiBaseFlag string, envKey, offline bool) []check {
 	var out []check
 
 	// 1. Credential.
@@ -122,8 +125,19 @@ func diagnose(cfg cliConfig, apiBaseFlag string, envKey bool) []check {
 	// same as "still valid" — this is the single most confusing 401 there is.
 	if !envKey && cfg.ExpiresAt != "" {
 		if msg, expired := cfg.expiryStatus(time.Now()); msg != "" {
+			// A WARNING even when the local clock says expired, because this
+			// timestamp is a snapshot taken at mint time and the server can have
+			// invalidated it in either direction since: a revoked key still looks
+			// valid here, and a refreshed session still looks dead. The live probe
+			// below asks the only authority there is, so let IT fail the run and
+			// keep this as the hint that explains why.
+			//
+			// Failing here instead sent people to `rindler login` over a stale
+			// local file while their key worked perfectly.
 			state := checkWarn
-			if expired {
+			if expired && offline {
+				// With no live leg this snapshot is all we have, so it has to
+				// carry the verdict.
 				state = checkFail
 			}
 			out = append(out, check{Name: "key expiry", State: state, Detail: msg, Fix: "rindler login"})
@@ -144,14 +158,11 @@ func diagnose(cfg cliConfig, apiBaseFlag string, envKey bool) []check {
 		}
 	}
 
-	// 4. API origin.
-	base := apiBaseFlag
-	if base == "" {
-		base = cfg.APIBase
-	}
-	if base == "" {
-		base = defaultAPIBase
-	}
+	// 4. API origin. Shared resolver: this was a FOURTH hand-rolled copy of the
+	// ladder that skipped RINDLER_API_BASE -- while its own Fix line told the
+	// reader to unset that variable, which could not have been the cause because
+	// nothing here ever read it.
+	base := resolveAPIBase(apiBaseFlag, cfg)
 	st := checkOK
 	detail := base
 	if base != defaultAPIBase {
