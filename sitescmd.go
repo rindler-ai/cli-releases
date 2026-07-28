@@ -81,24 +81,39 @@ type siteDetail struct {
 // it used to hardcode `run`'s mapper, so a failed `rindler sites` announced
 // "run failed" and offered run's advice about a site the user never named.
 func getJSON(ctx context.Context, httpc *http.Client, apiBase, key, verb, path string, out any) error {
+	_, err := getJSONRaw(ctx, httpc, apiBase, key, verb, path, out)
+	return err
+}
+
+// getJSONRaw is getJSON plus the response bytes, for `--json` to print
+// VERBATIM.
+//
+// Re-encoding the decoded struct instead -- which is what --json did -- is a
+// promise this CLI cannot keep: any field the struct does not declare is dropped
+// silently, so a script consuming --json sees the CLI's idea of the response
+// rather than the server's. That is the same under-transcription that zeroed
+// `usage`, except here it is the user's data, not ours.
+func getJSONRaw(
+	ctx context.Context, httpc *http.Client, apiBase, key, verb, path string, out any,
+) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+path, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	res, err := httpc.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer res.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(res.Body, 8<<20))
 	if res.StatusCode != http.StatusOK {
-		return verbError(verb, res.StatusCode, string(body))
+		return nil, verbError(verb, res.StatusCode, string(body))
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("unreadable response from %s: %s", path, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("unreadable response from %s: %s", path, strings.TrimSpace(string(body)))
 	}
-	return nil
+	return body, nil
 }
 
 func runSites(args []string) int {
@@ -116,14 +131,16 @@ func runSites(args []string) int {
 	defer cancel()
 
 	var resp configsResponse
-	if err := getJSON(ctx, defaultHTTPClient(), apiBase, key, "sites", "/v1/runtime/configs", &resp); err != nil {
+	raw, err := getJSONRaw(ctx, defaultHTTPClient(), apiBase, key, "sites", "/v1/runtime/configs", &resp)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "sites:", err)
 		return 1
 	}
 	sites := resp.Configs
 	if *jsonOut {
-		b, _ := json.MarshalIndent(sites, "", "  ")
-		fmt.Println(string(b))
+		// The server's bytes, not our re-encode of them. A field this CLI does
+		// not declare must still reach a script that asked for JSON.
+		fmt.Println(strings.TrimSpace(string(raw)))
 		return 0
 	}
 	if len(sites) == 0 {
@@ -184,14 +201,15 @@ func runActions(args []string) int {
 	defer cancel()
 
 	var detail siteDetail
-	if err := getJSON(ctx, defaultHTTPClient(), apiBase, key, "actions",
-		"/v1/runtime/configs/"+url.PathEscape(host), &detail); err != nil {
+	raw, err := getJSONRaw(ctx, defaultHTTPClient(), apiBase, key, "actions",
+		"/v1/runtime/configs/"+url.PathEscape(host), &detail)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "actions:", err)
 		return 1
 	}
 	if *jsonOut {
-		b, _ := json.MarshalIndent(detail, "", "  ")
-		fmt.Println(string(b))
+		// The server's bytes, verbatim. See getJSONRaw.
+		fmt.Println(strings.TrimSpace(string(raw)))
 		return 0
 	}
 	printActions(os.Stdout, detail, *all, *byScreen)

@@ -199,3 +199,58 @@ func TestFirstSentenceTrims(t *testing.T) {
 		t.Errorf("newlines should collapse, got %q", got)
 	}
 }
+
+// `--json` says RAW JSON, and must mean it.
+//
+// Re-encoding the decoded struct silently drops any field this CLI does not
+// declare, so a script asking for JSON got the CLI's idea of the response
+// instead of the server's. Same under-transcription that zeroed `usage`, except
+// here it is the user's data.
+func TestJSONOutputIsTheServersBytesNotOurReencode(t *testing.T) {
+	// A field no struct in this repo declares. It must survive to stdout.
+	body := `{"configs":[{"domain":"example.com","version":3,` +
+		`"a_field_the_cli_has_never_heard_of":{"nested":true}}],` +
+		`"a_top_level_field_we_do_not_declare":42}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	var resp configsResponse
+	raw, err := getJSONRaw(context.Background(), srv.Client(), srv.URL, "k", "sites",
+		"/v1/runtime/configs", &resp)
+	if err != nil {
+		t.Fatalf("getJSONRaw: %v", err)
+	}
+	for _, want := range []string{
+		"a_field_the_cli_has_never_heard_of",
+		"a_top_level_field_we_do_not_declare",
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("the raw body lost %q, so --json is lossy", want)
+		}
+	}
+	// And the decode still worked, so the human-readable path is unaffected.
+	if len(resp.Configs) != 1 || resp.Configs[0].Domain != "example.com" {
+		t.Errorf("decode broke: %+v", resp.Configs)
+	}
+}
+
+// A non-200 must not be mistaken for a body worth printing.
+func TestGetJSONRawReturnsNoBodyOnFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"nope"}`))
+	}))
+	defer srv.Close()
+	var resp configsResponse
+	raw, err := getJSONRaw(context.Background(), srv.Client(), srv.URL, "k", "sites",
+		"/v1/runtime/configs", &resp)
+	if err == nil {
+		t.Fatal("a 403 must be an error")
+	}
+	if raw != nil {
+		t.Errorf("a failed read returned %d bytes; --json would print an error body as data", len(raw))
+	}
+}
