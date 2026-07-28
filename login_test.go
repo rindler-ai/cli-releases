@@ -218,10 +218,35 @@ func TestAWrongStateIsADifferentRefusalFromAMissingOne(t *testing.T) {
 	}
 }
 
-// The 60-second server TTL must be stated. Without it an expiry reads as a
-// broken login rather than a slow one.
+// The 60-second server TTL must be stated TO THE USER. Without it an expiry reads
+// as a broken login rather than a slow one.
+//
+// The first version of this test asserted only that a constant was non-empty,
+// which is vacuous: it passed whether or not the constant reached the screen. It
+// now drives the real prompt path and asserts on what was printed.
 func TestThePasteFlowWarnsAboutTheDeadline(t *testing.T) {
-	if pasteCodeLifetime == "" {
-		t.Fatal("the paste lane must tell the user the code expires")
+	p, err := newPKCE()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := loginOpts{AuthorizeBase: "https://app.example", APIBase: "https://api.example", Device: "test"}
+
+	out := captureStdout(t, func() {
+		// The prompt returns nothing, so pasteLogin fails after printing -- which
+		// is fine: the printing is what is under test.
+		_, _ = pasteLogin(t.Context(), opts, p, defaultHTTPClient(),
+			func(string) error { return nil },
+			func(string) (string, error) { return "", nil })
+	})
+
+	if !strings.Contains(out, pasteCodeLifetime) {
+		t.Errorf("the deadline was never printed (want %q):\n%s", pasteCodeLifetime, out)
+	}
+	// And it must appear BEFORE the paste prompt, or the reader has already walked
+	// away to fetch the code.
+	dl := strings.Index(out, pasteCodeLifetime)
+	pr := strings.Index(out, "Paste the code")
+	if dl < 0 || (pr >= 0 && dl > pr) {
+		t.Errorf("the warning must come before the prompt:\n%s", out)
 	}
 }

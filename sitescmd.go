@@ -119,7 +119,12 @@ func getJSONRaw(
 func runSites(args []string) int {
 	fs := flag.NewFlagSet("sites", flag.ContinueOnError)
 	apiBaseFlag := fs.String("api-base", "", "Rindler API origin")
-	jsonOut := fs.Bool("json", false, "print the raw JSON list")
+	// "the server's JSON", not "list": this prints the response object
+	// ({"configs":[...]}), not a bare array. It used to re-encode our own decoded
+	// slice, which was both lossy and a different SHAPE, so a script reading
+	// `.[0].domain` now reads `.configs[0].domain`. Saying so in the flag help is
+	// the least a breaking change to a scripted surface owes its users.
+	jsonOut := fs.Bool("json", false, "print the server's JSON response verbatim")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -191,7 +196,7 @@ func runSites(args []string) int {
 func runActions(args []string) int {
 	fs := flag.NewFlagSet("actions", flag.ContinueOnError)
 	apiBaseFlag := fs.String("api-base", "", "Rindler API origin")
-	jsonOut := fs.Bool("json", false, "print the raw JSON detail")
+	jsonOut := fs.Bool("json", false, "print the server's JSON response verbatim")
 	all := fs.Bool("all", false, "include actions that are currently disabled")
 	byScreen := fs.Bool("by-screen", false, "group actions by screen instead of deduplicating them")
 	rest, err := parseAnyOrder(fs, args)

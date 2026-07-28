@@ -317,3 +317,36 @@ func captureStdout(t *testing.T, fn func()) string {
 	_ = r.Close()
 	return out
 }
+
+// --json prints the server's response OBJECT, not a bare array. That is a change
+// from the re-encoded slice it used to print, so a script reading `.[0].domain`
+// now reads `.configs[0].domain`.
+//
+// Pinned so the shape cannot drift again unnoticed, and so the flag's own help
+// text stays honest about it: it said "raw JSON list" while emitting an object.
+func TestSitesJSONIsTheResponseObject(t *testing.T) {
+	body := `{"configs":[{"domain":"example.com","version":3}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	isolate(t)
+	t.Setenv("RINDLER_API_KEY", "rindler_live_test")
+	out := captureStdout(t, func() {
+		if code := runSites([]string{"--json", "--api-base", srv.URL}); code != 0 {
+			t.Errorf("sites --json exited %d", code)
+		}
+	})
+	trimmed := strings.TrimSpace(out)
+	if !strings.HasPrefix(trimmed, "{") {
+		t.Fatalf("--json should print the response object, got:\n%s", trimmed)
+	}
+	if !strings.Contains(trimmed, `"configs"`) {
+		t.Errorf("the envelope key is missing:\n%s", trimmed)
+	}
+	// Byte-identical to what the server sent: that is the whole promise.
+	if trimmed != body {
+		t.Errorf("--json re-encoded the response.\n got: %s\nwant: %s", trimmed, body)
+	}
+}
