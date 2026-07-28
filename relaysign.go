@@ -3,8 +3,12 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/binary"
+	"encoding/hex"
 	"strconv"
+	"strings"
 )
 
 // Signing-message construction, mirrored byte-for-byte from the server.
@@ -64,4 +68,67 @@ func verifyPingSignature(serverPub ed25519.PublicKey, p secretPing) bool {
 		return false
 	}
 	return ed25519.Verify(serverPub, pingSigningMessage(p), p.ServerSignature)
+}
+
+// Pairing-channel TOFU.
+//
+// A cd_pair2_ pairing code carries a 16-byte fingerprint of the LANE'S server
+// signing key in its trailing bytes. The device must confirm that the
+// server_pubkey it is handed at pair/complete hashes to that fingerprint.
+//
+// THIS IS THE LOAD-BEARING HALF, and it was missing. The server checks the same
+// fingerprint at redeem and its own comment says so: "The DEVICE-side
+// fingerprint check remains load-bearing; this is early detection." Early
+// detection catches a lane-key rotation between mint and redeem. It cannot catch
+// a substituted RESPONSE, because a party who rewrites the response body is not
+// the party the server is checking.
+//
+// The attack the device-side check closes: the pairing code arrives over the
+// authenticated init call, so its fingerprint is a commitment made before any
+// response exists. Somebody able to alter only the pair/complete response would
+// otherwise hand this machine a server_pubkey they control -- and from then on
+// they could sign SecretPings this device trusts, which is credential
+// extraction, not just a bad pairing.
+const (
+	pairingFPTag = "rindler-device-relay/pairing-fp/v2"
+	// pairingFPLen mirrors devicerelay.PairingFingerprintLen.
+	pairingFPLen = 16
+	// pairingTokenPrefix2 marks a fingerprinted code. A code without it predates
+	// the fingerprint and carries nothing to check.
+	pairingTokenPrefix2 = "cd_pair2_"
+	// pairingNonceLen is the random half that precedes the fingerprint.
+	pairingNonceLen = 16
+)
+
+// pairingFingerprint recomputes the expected fingerprint for a server pubkey.
+func pairingFingerprint(serverPub []byte) []byte {
+	var b bytes.Buffer
+	encField(&b, []byte(pairingFPTag))
+	encField(&b, serverPub)
+	sum := sha256.Sum256(b.Bytes())
+	return sum[:pairingFPLen]
+}
+
+// serverKeyMatchesPairingCode reports whether serverPub is the key this pairing
+// code committed to.
+//
+// FAILS CLOSED on a malformed cd_pair2_ code: a code that announces a
+// fingerprint and then does not carry a readable one is not a code to trust.
+//
+// Returns true for a code with no prefix, because there is genuinely nothing to
+// verify there and refusing would break pairing against a lane that has not
+// adopted fingerprinted codes. That is the one soft edge in this check, and it is
+// the server's own position: it treats such codes the same way.
+func serverKeyMatchesPairingCode(pairingToken string, serverPub []byte) bool {
+	body, ok := strings.CutPrefix(pairingToken, pairingTokenPrefix2)
+	if !ok {
+		return true
+	}
+	raw, err := hex.DecodeString(body)
+	if err != nil || len(raw) != pairingNonceLen+pairingFPLen {
+		return false
+	}
+	// Constant time: the comparison is against a value an attacker chooses, and
+	// a byte-at-a-time answer would let them find the right one.
+	return subtle.ConstantTimeCompare(raw[pairingNonceLen:], pairingFingerprint(serverPub)) == 1
 }

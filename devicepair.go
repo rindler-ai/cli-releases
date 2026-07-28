@@ -187,6 +187,24 @@ func pairDevice(ctx context.Context, httpc *http.Client, apiBase, sessionKey str
 	}
 	serverPub, _ := base64.StdEncoding.DecodeString(doneOut.ServerPubkey)
 
+	// VERIFY THE KEY AGAINST THE FINGERPRINT THE PAIRING CODE COMMITTED TO.
+	//
+	// This is the device-side half of the pairing-channel check, and the server's
+	// own comment states it is the load-bearing one: the server verifies the same
+	// fingerprint at redeem, which catches a lane-key rotation, but cannot catch a
+	// substituted RESPONSE -- whoever rewrites the response body is not the party
+	// the server is checking.
+	//
+	// Without this, someone able to alter only the pair/complete response hands
+	// this machine a server_pubkey they control, and from then on can sign
+	// SecretPings this device trusts. That is credential extraction, not a failed
+	// pairing, so it refuses rather than warning.
+	if !serverKeyMatchesPairingCode(initOut.PairingToken, serverPub) {
+		return out, fmt.Errorf(
+			"pair/complete: the relay key does not match the one this pairing code committed to; " +
+				"refusing to pair (run `rindler vault enable` again to get a fresh code)")
+	}
+
 	out = deviceIdentity{
 		DeviceID:     doneOut.DeviceID,
 		DeviceToken:  doneOut.DeviceToken,
