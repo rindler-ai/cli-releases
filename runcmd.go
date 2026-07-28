@@ -51,6 +51,27 @@ type runStartResponse struct {
 	ID    string `json:"id"`
 }
 
+// runOutputs mirrors the server's RecordsView. A NAMED type, not the anonymous
+// struct this used to be: the shape grows as the server adds fields, and every
+// growth of an anonymous struct breaks every literal that constructs it, which
+// is friction that discourages exactly the field-adding this contract needs.
+type runOutputs struct {
+	Records   []map[string]any `json:"records"`
+	Truncated bool             `json:"truncated,omitempty"`
+	// Total is how many records EXIST, when the server knows. Without it
+	// "records: 5" is unreadable: five of five and five of twelve hundred look
+	// identical, and the second is the one worth knowing about.
+	Total int `json:"total,omitempty"`
+}
+
+// runEvidence mirrors the server's EvidenceView: where to LOOK at the run. A
+// truncated or walled result is exactly when someone wants the browser's own
+// view, and this CLI was dropping a link the server already sends.
+type runEvidence struct {
+	RunViewerURL string   `json:"run_viewer_url,omitempty"`
+	Screenshots  []string `json:"screenshots,omitempty"`
+}
+
 type retrievalView struct {
 	Outcome       string   `json:"outcome"`
 	Complete      bool     `json:"complete"`
@@ -66,13 +87,11 @@ type runJobEnvelope struct {
 	Verb   string `json:"verb,omitempty"`
 	// SessionID is the browser this run used. Populated for the run verb only,
 	// and the one way a caller learns which session to reuse next time.
-	SessionID string `json:"session_id,omitempty"`
-	Site      string `json:"site,omitempty"`
-	ErrMsg    string `json:"error_msg,omitempty"`
-	Outputs   *struct {
-		Records   []map[string]any `json:"records"`
-		Truncated bool             `json:"truncated,omitempty"`
-	} `json:"outputs,omitempty"`
+	SessionID string         `json:"session_id,omitempty"`
+	Site      string         `json:"site,omitempty"`
+	ErrMsg    string         `json:"error_msg,omitempty"`
+	Outputs   *runOutputs    `json:"outputs,omitempty"`
+	Evidence  *runEvidence   `json:"evidence,omitempty"`
 	Retrieval *retrievalView `json:"retrieval,omitempty"`
 	Usage     struct {
 		OutcomeCount int32 `json:"outcome_count"`
@@ -514,9 +533,19 @@ func printRunResult(w io.Writer, env runJobEnvelope) {
 	if env.Outputs != nil {
 		n = len(env.Outputs.Records)
 	}
-	fmt.Fprintf(w, "  records: %d\n", n)
+	if env.Outputs != nil && env.Outputs.Total > n {
+		// "5 of 1200" is a different fact from "5", and the difference is the
+		// whole reason to reach for --limit.
+		fmt.Fprintf(w, "  records: %d of %d\n", n, env.Outputs.Total)
+	} else {
+		fmt.Fprintf(w, "  records: %d\n", n)
+	}
 	if env.Outputs != nil && env.Outputs.Truncated {
 		fmt.Fprintln(w, "  note: the record set was truncated; raise it with --limit, or narrow the query")
+	}
+	// The link goes last, so it sits next to whatever went wrong above it.
+	if env.Evidence != nil && env.Evidence.RunViewerURL != "" {
+		fmt.Fprintf(w, "  look at it: %s\n", env.Evidence.RunViewerURL)
 	}
 	for i, rec := range recordsOf(env) {
 		if i >= 20 {

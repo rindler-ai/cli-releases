@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -157,5 +158,64 @@ func TestAJobPollFailureUsesItsOwnVerb(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "run status") {
 		t.Errorf("the message should name the verb that failed, got %q", err)
+	}
+}
+
+// "records: 5" is unreadable on its own: five of five and five of twelve hundred
+// look identical, and the second is the one you needed to know about. The server
+// sends the total and the CLI was dropping it.
+func TestRecordCountShowsTheTotalWhenThereIsMore(t *testing.T) {
+	// DECODED from JSON, not built in Go: the field has to arrive off the wire
+	// for the json tag to be under test. Constructing it directly passes even
+	// when the tag is wrong, which is how a decode bug hides behind a green test.
+	var env runJobEnvelope
+	if err := json.Unmarshal([]byte(
+		`{"status":"complete","outputs":{"records":[{"a":1},{"a":2}],"total":1200}}`), &env); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	printRunResult(&b, env)
+	if !strings.Contains(b.String(), "2 of 1200") {
+		t.Errorf("the total is missing:\n%s", b.String())
+	}
+
+	// When the total matches what came back, the "of N" is noise.
+	var b2 strings.Builder
+	printRunResult(&b2, runJobEnvelope{Status: "complete", Outputs: &runOutputs{
+		Records: []map[string]any{{"a": 1}}, Total: 1,
+	}})
+	if strings.Contains(b2.String(), " of ") {
+		t.Errorf("a complete set should not be annotated:\n%s", b2.String())
+	}
+
+	// And a server that sends no total must not render "of 0".
+	var b3 strings.Builder
+	printRunResult(&b3, runJobEnvelope{Status: "complete", Outputs: &runOutputs{
+		Records: []map[string]any{{"a": 1}},
+	}})
+	if strings.Contains(b3.String(), " of ") {
+		t.Errorf("an absent total was rendered:\n%s", b3.String())
+	}
+}
+
+// A truncated or walled result is exactly when someone wants the browser's own
+// view. The server sends the link; the CLI was dropping it.
+func TestTheRunViewerLinkIsSurfaced(t *testing.T) {
+	var b strings.Builder
+	printRunResult(&b, runJobEnvelope{
+		Status:   "complete",
+		Outputs:  &runOutputs{Records: []map[string]any{{"a": 1}}, Truncated: true},
+		Evidence: &runEvidence{RunViewerURL: "https://app.example/runs/abc"},
+	})
+	out := b.String()
+	if !strings.Contains(out, "https://app.example/runs/abc") {
+		t.Errorf("the run-viewer link is missing:\n%s", out)
+	}
+
+	// No evidence, no line — never an empty "look at it:".
+	var b2 strings.Builder
+	printRunResult(&b2, runJobEnvelope{Status: "complete"})
+	if strings.Contains(b2.String(), "look at it") {
+		t.Errorf("printed a link line with no link:\n%s", b2.String())
 	}
 }

@@ -186,10 +186,7 @@ func TestPrintRunResultSeparatesStatusFromRetrieval(t *testing.T) {
 func TestPrintRunResultReportsTruncation(t *testing.T) {
 	var buf bytes.Buffer
 	env := runJobEnvelope{Status: "complete"}
-	env.Outputs = &struct {
-		Records   []map[string]any `json:"records"`
-		Truncated bool             `json:"truncated,omitempty"`
-	}{Records: []map[string]any{{"title": "A"}}, Truncated: true}
+	env.Outputs = &runOutputs{Records: []map[string]any{{"title": "A"}}, Truncated: true}
 	printRunResult(&buf, env)
 	if !strings.Contains(buf.String(), "truncated") {
 		t.Errorf("a truncated record set must say so, got:\n%s", buf.String())
