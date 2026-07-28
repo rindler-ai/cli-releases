@@ -146,3 +146,26 @@ func statusClaudeCode() (string, bool) {
 	existing, _ := readFileOrEmpty(p)
 	return p, mcpServerPresentJSON(existing, mcpServerName)
 }
+
+// installedClaudeURL reports the endpoint currently written into the agent's
+// config, so status can say WHICH server is installed rather than only that one
+// is. An entry left over from a different lane is the failure this catches:
+// present, healthy-looking, and pointed somewhere else.
+func installedClaudeURL() string {
+	p, err := claudeConfigPath()
+	if err != nil {
+		return ""
+	}
+	existing, _ := readFileOrEmpty(p)
+	if len(existing) == 0 {
+		return ""
+	}
+	doc := map[string]any{}
+	if json.Unmarshal(existing, &doc) != nil {
+		return ""
+	}
+	servers, _ := doc["mcpServers"].(map[string]any)
+	entry, _ := servers[mcpServerName].(map[string]any)
+	url, _ := entry["url"].(string)
+	return url
+}

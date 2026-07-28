@@ -50,13 +50,43 @@ func removeAllAgents() []agentResult {
 func statusAllAgents() []agentResult {
 	var out []agentResult
 
+	// Report the endpoint, not just the presence. "Installed" was true of an
+	// entry pointing at a lane the user no longer uses -- which looks healthy
+	// and sends every agent call somewhere else.
+	want := mcpEndpoint(loadConfigOrEmpty())
+
 	p, present := statusClaudeCode()
-	out = append(out, agentResult{agent: "Claude Code", path: p, ok: present, note: presentNote(present)})
+	out = append(out, agentResult{agent: "Claude Code", path: p, ok: present,
+		note: endpointNote(present, installedClaudeURL(), want)})
 
 	p2, present2 := statusCodex()
 	out = append(out, agentResult{agent: "Codex", path: p2, ok: present2, note: presentNote(present2)})
 
 	return out
+}
+
+// endpointNote says which server is installed and flags a mismatch. An unknown
+// installed URL (an older entry, or a shape we cannot read) falls back to the
+// plain presence note rather than inventing a disagreement.
+func endpointNote(present bool, installed, want string) string {
+	if !present {
+		return presentNote(false)
+	}
+	switch {
+	case installed == "":
+		return presentNote(true)
+	case want != "" && installed != want:
+		return "installed, but pointing at " + installed + " (expected " + want + "); run `rindler mcp install` to correct it"
+	default:
+		return "installed → " + installed
+	}
+}
+
+// loadConfigOrEmpty is loadConfig without the error: for a status line, a
+// missing config is a legitimate state, not a failure.
+func loadConfigOrEmpty() cliConfig {
+	cfg, _ := loadConfig()
+	return cfg
 }
 
 func removedNote(removed bool) string {

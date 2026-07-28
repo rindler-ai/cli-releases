@@ -250,11 +250,11 @@ func mcpEndpoint(cfg cliConfig) string {
 	if cfg.MCPURL != "" {
 		return cfg.MCPURL
 	}
-	base := cfg.APIBase
-	if base == "" {
-		base = defaultAPIBase
-	}
-	return strings.TrimRight(base, "/") + "/mcp"
+	// Same ladder as every command, so `rindler mcp install` on a box that only
+	// has RINDLER_API_KEY and RINDLER_API_BASE set does not quietly install the
+	// PRODUCTION endpoint into the agent's config -- a wrong value here is worse
+	// than most, because it persists in a file the user will not think to check.
+	return resolveAPIBase("", cfg) + "/mcp"
 }
 
 // mappingRequested decides whether login asks for site-mapping capability. It is
