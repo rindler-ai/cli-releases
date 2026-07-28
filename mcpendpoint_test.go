@@ -71,3 +71,47 @@ func TestInstalledURLReadsWhatInstallWrote(t *testing.T) {
 		t.Fatalf("installedClaudeURL = %q, want what install wrote", got)
 	}
 }
+
+// Codex readback. Claude Code got this in the mcp fix and Codex did not, so
+// `mcp status` could report "configured" for a Codex entry pointing at a lane
+// the user no longer uses.
+func TestInstalledCodexURLReadsOurTableOnly(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CODEX_HOME", dir)
+
+	write := func(body string) {
+		if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write(codexBlock("https://ours.example/mcp", "rindler_live_k") + "\n")
+	if got := installedCodexURL(); got != "https://ours.example/mcp" {
+		t.Fatalf("installedCodexURL = %q, want what install wrote", got)
+	}
+
+	// A LATER table's url must not be read as ours. Without the table-boundary
+	// stop, status would report a mismatch that does not exist.
+	write(codexTableHeader + "\n" +
+		"[mcp_servers.something_else]\nurl = \"https://theirs.example/mcp\"\n")
+	if got := installedCodexURL(); got != "" {
+		t.Errorf("read %q from another server's table", got)
+	}
+
+	// An EARLIER table's url likewise.
+	write("[mcp_servers.something_else]\nurl = \"https://theirs.example/mcp\"\n" +
+		codexBlock("https://ours.example/mcp", "k") + "\n")
+	if got := installedCodexURL(); got != "https://ours.example/mcp" {
+		t.Errorf("got %q; ours follows another table and must still be found", got)
+	}
+
+	// No config at all, and a config without our table.
+	write("")
+	if got := installedCodexURL(); got != "" {
+		t.Errorf("empty config yielded %q", got)
+	}
+	write("[mcp_servers.other]\nurl = \"https://theirs.example/mcp\"\n")
+	if got := installedCodexURL(); got != "" {
+		t.Errorf("a config without our table yielded %q", got)
+	}
+}

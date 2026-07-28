@@ -174,3 +174,44 @@ func statusCodex() (string, bool) {
 	existing, _ := readFileOrEmpty(p)
 	return p, codexTablePresent(existing)
 }
+
+// installedCodexURL reports the endpoint currently in Codex's config, so status
+// can name WHICH server is installed rather than only that one is -- the same
+// readback Claude Code already has.
+//
+// A deliberately small parser rather than a TOML dependency: this repo is
+// stdlib-only apart from the websocket client, and all this needs is the `url`
+// line inside our own table. It stops at the next table header, so a `url` key
+// belonging to some other MCP server cannot be mistaken for ours.
+func installedCodexURL() string {
+	p, err := codexConfigPath()
+	if err != nil {
+		return ""
+	}
+	existing, err := readFileOrEmpty(p)
+	if err != nil || len(existing) == 0 {
+		return ""
+	}
+	inOurTable := false
+	for _, line := range strings.Split(string(existing), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == codexTableHeader {
+			inOurTable = true
+			continue
+		}
+		// Any OTHER table header ends ours. Without this a later server's url
+		// would be read as ours and status would report a mismatch that is not.
+		if inOurTable && isTOMLTableHeader(trimmed) {
+			return ""
+		}
+		if !inOurTable {
+			continue
+		}
+		key, value, found := strings.Cut(trimmed, "=")
+		if !found || strings.TrimSpace(key) != "url" {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(value), `"`)
+	}
+	return ""
+}

@@ -60,7 +60,8 @@ func statusAllAgents() []agentResult {
 		note: endpointNote(present, installedClaudeURL(), want)})
 
 	p2, present2 := statusCodex()
-	out = append(out, agentResult{agent: "Codex", path: p2, ok: present2, note: presentNote(present2)})
+	out = append(out, agentResult{agent: "Codex", path: p2, ok: present2,
+		note: endpointNote(present2, installedCodexURL(), want)})
 
 	return out
 }

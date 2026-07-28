@@ -105,12 +105,22 @@ func resultPage(title, body string) string {
 
 // pasteLogin runs the different-browser / headless flow: print the URL, read the
 // pasted code#state, and exchange.
+// pasteCodeLifetime mirrors the server's cliAuthCodeTTL (60s). Stated to the
+// user because the window is short enough to miss while walking to a phone.
+const pasteCodeLifetime = "a minute"
+
 func pasteLogin(ctx context.Context, opts loginOpts, p pkce, httpc *http.Client, openFn func(string) error, prompt func(string) (string, error)) (tokenResponse, error) {
 	redirect := strings.TrimRight(opts.AuthorizeBase, "/") + "/cli/complete"
 	authURL := buildAuthorizeURL(opts.AuthorizeBase, redirect, p, opts.Device, opts.Mapping, true)
 	fmt.Println("Open this URL in a browser on any device to sign in:")
 	fmt.Println("  " + authURL)
 	_ = openFn(authURL) // best-effort; the user may be on another machine
+	// The code expires in a minute server-side. Saying so is not decoration: the
+	// window is tight for "open this on your phone, sign in, approve, come back",
+	// and without the warning an expiry reads as a broken login rather than a
+	// slow one.
+	fmt.Printf("\nThe code is only valid for about %s after it appears, so have this\n", pasteCodeLifetime)
+	fmt.Println("terminal ready before you approve.")
 
 	pasted, err := prompt("\nPaste the code shown after you approve: ")
 	if err != nil {
@@ -120,7 +130,21 @@ func pasteLogin(ctx context.Context, opts loginOpts, p pkce, httpc *http.Client,
 	if code == "" {
 		return tokenResponse{}, errors.New("no code entered")
 	}
-	if state != "" && state != p.State {
+	// STATE IS REQUIRED, not merely checked when present.
+	//
+	// The dashboard will not render a code without one -- /cli/complete refuses
+	// when either half is missing, and /cli/authorize refuses a request with no
+	// state at all -- so a stateless paste is never something this flow produced.
+	// It is a truncated copy, or a bare code somebody else supplied.
+	//
+	// Skipping the check on an absent state, which is what this did, is the
+	// weaker half of a CSRF guard: an attacker who can get a victim to paste a
+	// code they chose only has to omit the fragment to bypass it entirely.
+	if state == "" {
+		return tokenResponse{}, errors.New(
+			"that code is missing its verification part — copy the WHOLE value, including everything after the '#'")
+	}
+	if state != p.State {
 		return tokenResponse{}, errors.New("state mismatch (possible CSRF) — aborting")
 	}
 	return exchangeToken(ctx, httpc, opts.APIBase, code, p.Verifier, redirect)

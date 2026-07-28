@@ -155,3 +155,73 @@ func TestMappingIsRequestedByDefault(t *testing.T) {
 		t.Fatal("--no-map must opt out")
 	}
 }
+
+// STATE IS REQUIRED in the paste lane, not merely checked when present.
+//
+// The dashboard will not render a code without one: /cli/complete refuses when
+// either half is missing, and /cli/authorize refuses a request with no state.
+// So a stateless paste is never something this flow produced -- it is a
+// truncated copy, or a bare code somebody else supplied.
+//
+// Skipping the check on an absent state is the weaker half of a CSRF guard: an
+// attacker who gets a victim to paste a code they chose only has to omit the
+// fragment to bypass it.
+func TestThePasteLaneRequiresState(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a stateless code must be refused BEFORE any exchange")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p, err := newPKCE()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := loginOpts{AuthorizeBase: "https://app.example", APIBase: srv.URL, Device: "test"}
+
+	// A bare code, no '#state'.
+	_, err = pasteLogin(t.Context(), opts, p, srv.Client(),
+		func(string) error { return nil },
+		func(string) (string, error) { return "just-a-code", nil })
+	if err == nil {
+		t.Fatal("a stateless paste must be refused")
+	}
+	if !strings.Contains(err.Error(), "verification part") {
+		t.Errorf("the refusal should tell the user to copy the whole value, got %q", err)
+	}
+}
+
+// A WRONG state is still a CSRF refusal, and must not be confused with a missing
+// one: the two have different causes and different fixes.
+func TestAWrongStateIsADifferentRefusalFromAMissingOne(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a mismatched state must be refused before any exchange")
+	}))
+	defer srv.Close()
+
+	p, err := newPKCE()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := loginOpts{AuthorizeBase: "https://app.example", APIBase: srv.URL, Device: "test"}
+	_, err = pasteLogin(t.Context(), opts, p, srv.Client(),
+		func(string) error { return nil },
+		func(string) (string, error) { return "code#not-the-right-state", nil })
+	if err == nil {
+		t.Fatal("a mismatched state must be refused")
+	}
+	if !strings.Contains(err.Error(), "CSRF") {
+		t.Errorf("a mismatch should name CSRF, got %q", err)
+	}
+	if strings.Contains(err.Error(), "verification part") {
+		t.Error("a mismatch is not a truncated paste; the two must read differently")
+	}
+}
+
+// The 60-second server TTL must be stated. Without it an expiry reads as a
+// broken login rather than a slow one.
+func TestThePasteFlowWarnsAboutTheDeadline(t *testing.T) {
+	if pasteCodeLifetime == "" {
+		t.Fatal("the paste lane must tell the user the code expires")
+	}
+}
