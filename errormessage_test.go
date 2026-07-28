@@ -88,3 +88,34 @@ func TestAnUnfinishedJobIsNotMarkedFailed(t *testing.T) {
 		t.Error("a complete job must be marked succeeded")
 	}
 }
+
+// A finished job becomes an exit code in ONE place, because it used to be two
+// that disagreed: the follow path weighed `retrieval` and `run status --once` did
+// not, so the same finished job exited 1 when followed and 0 when polled. A
+// script using the shortcut read a bot-walled run as a win.
+func TestOneVerdictForAFinishedRun(t *testing.T) {
+	incomplete := &retrievalView{Outcome: "bot_wall", Complete: false}
+	complete := &retrievalView{Outcome: "ok", Complete: true}
+
+	for _, tc := range []struct {
+		name string
+		env  runJobEnvelope
+		want int
+	}{
+		{"complete and retrieved", runJobEnvelope{Status: "complete", Retrieval: complete}, 0},
+		// THE CASE THE SHORTCUT MISSED. The attempt ran; the site gave nothing.
+		{"complete but retrieved nothing usable", runJobEnvelope{Status: "complete", Retrieval: incomplete}, 1},
+		{"failed", runJobEnvelope{Status: "failed"}, 1},
+		{"escalated", runJobEnvelope{Status: "needs_escalation"}, 1},
+		{"expired", runJobEnvelope{Status: "expired"}, 1},
+		// No retrieval reported at all: status is then the only verdict there is.
+		{"complete, no retrieval reported", runJobEnvelope{Status: "complete"}, 0},
+		// NOT finished is not a failure; the caller decides whether to wait.
+		{"still running", runJobEnvelope{Status: "running", Retrieval: incomplete}, 0},
+		{"queued", runJobEnvelope{Status: "queued"}, 0},
+	} {
+		if got := runExitCode(tc.env); got != tc.want {
+			t.Errorf("%s: exit %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}

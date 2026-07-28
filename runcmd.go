@@ -102,6 +102,37 @@ func runTerminal(status string) (done bool, ok bool) {
 	}
 }
 
+// runExitCode is the ONE place a finished job becomes an exit code.
+//
+// Two verdicts decide it, and that is the whole reason the server reports both:
+//
+//	status     did the attempt RUN
+//	retrieval  did it come back with what was asked for
+//
+// A job can finish "complete" having retrieved nothing usable -- a bot wall, an
+// expired cookie, a rotted selector -- and to a script that is not a success.
+//
+// It is one function because it used to be two, and they disagreed: the follow
+// path weighed retrieval and `run status --once` did not, so the same finished
+// job exited 1 when followed and 0 when polled. A script using the shortcut read
+// a walled run as a win. Same defect the map lane had, same fix.
+//
+// A job that has NOT finished is not a failure; the caller decides whether to
+// keep waiting.
+func runExitCode(env runJobEnvelope) int {
+	done, ok := runTerminal(env.Status)
+	if !done {
+		return 0
+	}
+	if !ok {
+		return 1
+	}
+	if env.Retrieval != nil && !env.Retrieval.Complete {
+		return 1
+	}
+	return 0
+}
+
 // parseInputs turns repeated k=v flags into the inputs map. An entry with no '='
 // is a mistake worth refusing: silently dropping it would run the action with a
 // missing parameter and blame the site for the empty result.
@@ -425,23 +456,14 @@ func followRun(ctx context.Context, httpc *http.Client, apiBase, key, jobID stri
 			fmt.Fprintln(os.Stderr, "run: status check failed:", err)
 			return 1
 		}
-		if done, ok := runTerminal(env.Status); done {
+		if done, _ := runTerminal(env.Status); done {
 			if jsonOut {
 				b, _ := json.MarshalIndent(env, "", "  ")
 				fmt.Println(string(b))
 			} else {
 				printRunResult(os.Stdout, env)
 			}
-			// The semantic outcome decides the exit code when it is present: a job
-			// that RAN fine but retrieved nothing usable is not a success to a
-			// script, which is the whole reason the server reports both.
-			if !ok {
-				return 1
-			}
-			if env.Retrieval != nil && !env.Retrieval.Complete {
-				return 1
-			}
-			return 0
+			return runExitCode(env)
 		}
 		if !jsonOut && env.Status != last {
 			fmt.Println(" ", env.Status)
@@ -605,10 +627,9 @@ func runRunStatus(args []string) int {
 		} else {
 			printRunResult(os.Stdout, env)
 		}
-		if done, ok := runTerminal(env.Status); done && !ok {
-			return 1
-		}
-		return 0
+		// The SAME verdict the follow path uses. A shortcut that disagreed with
+		// the thing it shortcuts is worse than no shortcut.
+		return runExitCode(env)
 	}
 	return followRun(ctx, httpc, apiBase, key, jobID, *jsonOut)
 }
