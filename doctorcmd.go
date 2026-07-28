@@ -209,7 +209,11 @@ func pingAPI(ctx context.Context, httpc *http.Client, apiBase, key string) check
 		var resp configsResponse
 		_ = json.Unmarshal(body, &resp)
 		return check{Name: "api reachable", State: checkOK,
-			Detail: fmt.Sprintf("%d site(s) available", len(resp.Configs))}
+			// "your own" because this endpoint is owner-fenced: it lists the
+			// configs YOU published, not the workspace's shared sites and not the
+			// platform catalog. "N sites available" read as a total, so a healthy
+			// account with plenty of shared sites looked nearly empty.
+			Detail: fmt.Sprintf("reachable, %d site(s) you have mapped", len(resp.Configs))}
 	case http.StatusUnauthorized:
 		return check{Name: "api reachable", State: checkFail,
 			Detail: "the key is not accepted (expired or revoked)", Fix: "rindler login"}

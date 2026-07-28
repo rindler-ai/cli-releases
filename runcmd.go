@@ -435,7 +435,14 @@ func runJob(ctx context.Context, httpc *http.Client, apiBase, key, jobID string)
 	defer res.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(res.Body, 4<<20))
 	if res.StatusCode != http.StatusOK {
-		return out, runAuthError(res.StatusCode, string(body))
+		// A 404 HERE is an unknown JOB, not an unknown site. run's mapper answers
+		// 404 with "map it first: rindler map <url>", which sends someone to map a
+		// site that is mapped fine -- the job id is what is wrong, usually a typo
+		// or a job that has aged out of the ledger.
+		if res.StatusCode == http.StatusNotFound {
+			return out, fmt.Errorf("no job with that id (check the id, or it may have aged out)")
+		}
+		return out, verbError("run status", res.StatusCode, string(body))
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
 		return out, fmt.Errorf("unreadable job envelope: %s", strings.TrimSpace(string(body)))

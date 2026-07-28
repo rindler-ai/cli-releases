@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -117,5 +119,43 @@ func TestOneVerdictForAFinishedRun(t *testing.T) {
 		if got := runExitCode(tc.env); got != tc.want {
 			t.Errorf("%s: exit %d, want %d", tc.name, got, tc.want)
 		}
+	}
+}
+
+// A 404 on the JOB poll is an unknown job, not an unknown site. run's mapper
+// answered it with "map it first: rindler map <url>", which sends someone to map
+// a site that is mapped fine -- the job id is what is wrong.
+func TestAnUnknownJobDoesNotBlameTheSite(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"job not found"}`))
+	}))
+	defer srv.Close()
+
+	_, err := runJob(context.Background(), srv.Client(), srv.URL, "k", "no-such-job")
+	if err == nil {
+		t.Fatal("an unknown job must be an error")
+	}
+	if strings.Contains(err.Error(), "rindler map") {
+		t.Errorf("blamed the site for an unknown job id: %q", err)
+	}
+	if !strings.Contains(err.Error(), "job") {
+		t.Errorf("the message should name the job, got %q", err)
+	}
+}
+
+// And a non-404 job-poll failure keeps the server's own words, like everywhere
+// else, rather than falling back to run's site advice.
+func TestAJobPollFailureUsesItsOwnVerb(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	_, err := runJob(context.Background(), srv.Client(), srv.URL, "k", "j1")
+	if err == nil {
+		t.Fatal("a 502 must be an error")
+	}
+	if !strings.Contains(err.Error(), "run status") {
+		t.Errorf("the message should name the verb that failed, got %q", err)
 	}
 }
