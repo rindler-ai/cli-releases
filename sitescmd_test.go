@@ -285,7 +285,7 @@ func TestAnEmptyListDoesNotClaimNothingIsMapped(t *testing.T) {
 		}
 	}
 	// Must name the two things it omits, so a puzzled reader can find their site.
-	for _, want := range []string{"workspace", "expired"} {
+	for _, want := range []string{"workspace", "retention"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the message does not mention %q:\n%s", want, out)
 		}

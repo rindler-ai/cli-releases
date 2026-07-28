@@ -150,16 +150,23 @@ func runSites(args []string) int {
 		// this response cannot support -- and it reads as "Rindler has nothing
 		// for you" to someone whose workspace has plenty.
 		// Do not assert that nothing is mapped: this response cannot support it.
-		// The query also EXCLUDES an authed site whose saved session has lapsed
-		// (ListPublishedSiteConfigsByUser filters on expires_at > NOW()), so a
-		// user whose only site is an expired authed one gets an empty list and
-		// was told they had never mapped anything.
+		// ListPublishedSiteConfigsByUser also EXCLUDES an authed config past its
+		// expires_at, so a user whose only site is one of those gets an empty list.
+		//
+		// And name that cause CORRECTLY. expires_at on user_site_configs is a PII
+		// PURGE marker, not a login expiry: an authed crawl's private config holds
+		// the user's real account data (balances, order ids, names), so it is
+		// written with a retention window and swept. An earlier version of this
+		// message called it an expired login and told the reader to run
+		// `rindler creds add`, which does not touch a purged config -- advice that
+		// cannot work is worse than none, because they will believe they tried.
 		fmt.Println("Nothing here you can act on right now.")
 		fmt.Println("This lists your OWN mapped sites that are currently usable, so it")
-		fmt.Println("omits two things: sites shared with your workspace (on the")
-		fmt.Println("dashboard), and any site of yours whose saved login has expired.")
-		fmt.Println("\nMap one:      rindler map https://example.com")
-		fmt.Println("Expired login: re-add it with  rindler creds add <site>")
+		fmt.Println("omits two things: sites shared with your workspace (those are on")
+		fmt.Println("the dashboard), and any site you mapped while signed in whose")
+		fmt.Println("private config has passed its retention window and been purged.")
+		fmt.Println("\nMap a new one:   rindler map https://example.com")
+		fmt.Println("Purged authed map: map it again while signed in.")
 		return 0
 	}
 	sort.Slice(sites, func(i, j int) bool { return sites[i].Domain < sites[j].Domain })

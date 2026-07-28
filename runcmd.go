@@ -146,10 +146,42 @@ func runExitCode(env runJobEnvelope) int {
 	if !ok {
 		return 1
 	}
-	if env.Retrieval != nil && !env.Retrieval.Complete {
+	if env.Retrieval != nil && !env.Retrieval.Complete && !truncationOnly(env) {
 		return 1
 	}
 	return 0
+}
+
+// truncationOnly reports whether the ONLY thing incomplete about a retrieval is
+// that the list was capped.
+//
+// The server marks a run `complete: false` when it returned records AND hit the
+// cap (retrieval_outcome.go: records > 0 && truncated -> OutcomePartial). That is
+// the ordinary case for any site with more rows than the cap, which defaults to
+// five -- so treating incompleteness alone as failure made a perfectly healthy
+// `rindler run` exit 1, and would have broken every script that checks the
+// status. A false failure is worse than the silent success it replaced.
+//
+// A capped page is what the caller asked for: they wanted a page, the truncation
+// is already reported as a note, and --limit is how they ask for more. Anything
+// ELSE incomplete -- a bot wall, an expired cookie, an unmet requirement -- still
+// fails, which is the case the split verdict exists for.
+func truncationOnly(env runJobEnvelope) bool {
+	if env.Retrieval == nil || env.Outputs == nil {
+		return false
+	}
+	// Records AND truncation, and no other stated reason. An empty result that is
+	// merely truncated is NOT this case: nothing came back.
+	if len(env.Outputs.Records) == 0 || !env.Outputs.Truncated {
+		return false
+	}
+	for _, r := range env.Retrieval.Reasons {
+		if !strings.Contains(strings.ToLower(r), "truncat") &&
+			!strings.Contains(strings.ToLower(r), "cap") {
+			return false
+		}
+	}
+	return true
 }
 
 // parseInputs turns repeated k=v flags into the inputs map. An entry with no '='
@@ -437,6 +469,7 @@ func startRunWithSession(
 		return "", runAuthError(res.StatusCode, string(body))
 	}
 	var out runStartResponse
+	lastJobBody = body
 	if err := json.Unmarshal(body, &out); err != nil {
 		return "", fmt.Errorf("unreadable start response: %s", strings.TrimSpace(string(body)))
 	}
@@ -513,8 +546,7 @@ func followRun(
 		}
 		if done, _ := runTerminal(env.Status); done {
 			if jsonOut {
-				b, _ := json.MarshalIndent(env, "", "  ")
-				fmt.Println(string(b))
+				fmt.Println(strings.TrimSpace(string(lastJobBody)))
 			} else {
 				printRunResult(os.Stdout, env)
 			}
@@ -536,6 +568,19 @@ func followRun(
 
 // printRunResult renders the terminal envelope for a human, keeping the run
 // status and the semantic retrieval outcome visibly distinct.
+// lastJobBody holds the raw bytes of the most recent job poll, so `--json` can
+// print the SERVER's response rather than a re-encode of our struct.
+//
+// A re-encode drops every field this CLI does not declare -- which is the same
+// lossy `--json` already fixed for sites/actions, and the rule was stated there:
+// a script asking for JSON must get the server's answer, not ours. Threading the
+// body through every return would have meant changing four signatures for a
+// debug flag; this keeps the change where the flag is read.
+//
+// Not concurrency-safe, and does not need to be: one run follows one job in one
+// goroutine.
+var lastJobBody []byte
+
 func printRunResult(w io.Writer, env runJobEnvelope) {
 	// done BEFORE ok. runTerminal returns (false,false) for a job still in
 	// flight, so keying the marker on ok alone stamped a ✗ on every "queued"
@@ -687,8 +732,7 @@ func runRunStatus(args []string) int {
 			return 1
 		}
 		if *jsonOut {
-			b, _ := json.MarshalIndent(env, "", "  ")
-			fmt.Println(string(b))
+			fmt.Println(strings.TrimSpace(string(lastJobBody)))
 		} else {
 			printRunResult(os.Stdout, env)
 		}

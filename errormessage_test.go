@@ -219,3 +219,54 @@ func TestTheRunViewerLinkIsSurfaced(t *testing.T) {
 		t.Errorf("printed a link line with no link:\n%s", b2.String())
 	}
 }
+
+// A run that returned records and merely hit the list cap is a SUCCESS.
+//
+// The server marks such a run `complete: false` (records > 0 && truncated ->
+// OutcomePartial), which is the ordinary case for any site with more rows than
+// the cap — five by default. Treating incompleteness alone as failure made a
+// perfectly healthy `rindler run` exit 1 and would have broken every script that
+// checks the status. A false failure is worse than the silent success it replaced.
+func TestATruncatedButHealthyRunSucceeds(t *testing.T) {
+	env := runJobEnvelope{
+		Status:    "complete",
+		Outputs:   &runOutputs{Records: []map[string]any{{"a": 1}}, Truncated: true, Total: 1200},
+		Retrieval: &retrievalView{Outcome: "partial", Complete: false},
+	}
+	if got := runExitCode(env); got != 0 {
+		t.Fatalf("exit %d; a capped page is what the caller asked for", got)
+	}
+}
+
+// Anything ELSE incomplete still fails. That is the case the split verdict exists
+// for: a bot wall lets the job finish while returning nothing usable.
+func TestANonTruncationPartialStillFails(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  runJobEnvelope
+	}{
+		{"bot wall with a reason", runJobEnvelope{
+			Status:    "complete",
+			Outputs:   &runOutputs{Records: []map[string]any{{"a": 1}}, Truncated: true},
+			Retrieval: &retrievalView{Complete: false, Reasons: []string{"bot_wall"}},
+		}},
+		{"nothing came back at all", runJobEnvelope{
+			Status:    "complete",
+			Outputs:   &runOutputs{Records: nil, Truncated: true},
+			Retrieval: &retrievalView{Complete: false},
+		}},
+		{"incomplete, not truncated", runJobEnvelope{
+			Status:    "complete",
+			Outputs:   &runOutputs{Records: []map[string]any{{"a": 1}}},
+			Retrieval: &retrievalView{Complete: false},
+		}},
+		{"no outputs at all", runJobEnvelope{
+			Status:    "complete",
+			Retrieval: &retrievalView{Complete: false},
+		}},
+	} {
+		if got := runExitCode(tc.env); got != 1 {
+			t.Errorf("%s: exit %d, want 1", tc.name, got)
+		}
+	}
+}
