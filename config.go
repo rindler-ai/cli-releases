@@ -39,8 +39,12 @@ type cliConfig struct {
 	ExpiresAt string `json:"expires_at,omitempty"`
 	// MapperAccess records whether the active key carries mapping capability.
 	MapperAccess bool `json:"mapper_access,omitempty"`
-	// ClerkUserID is the account the key is scoped to (display / whoami).
+	// ClerkUserID is the WORKSPACE the key is scoped to (the owner's clerk id),
+	// which is a different account from the signer for a workspace member.
 	ClerkUserID string `json:"clerk_user_id,omitempty"`
+	// AccountClerkUserID is the signed-in account itself — the one Email names.
+	// Empty against a server that predates the field.
+	AccountClerkUserID string `json:"account_clerk_user_id,omitempty"`
 }
 
 // configDir resolves the config directory, honoring $RINDLER_CONFIG_DIR, then

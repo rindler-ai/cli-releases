@@ -268,19 +268,46 @@ func runWhoami() int {
 		fmt.Fprintln(os.Stderr, "not logged in")
 		return 1
 	}
-	// Name the ACCOUNT when we know it. The whole job of whoami is "which account
-	// is this?", and an opaque Clerk id cannot answer that for anyone with a
-	// personal and a work account, or for an operator checking a machine.
-	if cfg.Email != "" && cfg.ClerkUserID != "" {
-		fmt.Printf("%s (%s)\n", cfg.Email, cfg.ClerkUserID)
-	} else if cfg.Email != "" {
-		fmt.Println(cfg.Email)
-	} else if cfg.ClerkUserID != "" {
-		fmt.Println(cfg.ClerkUserID)
-	} else {
-		fmt.Printf("logged in (key …%s)\n", cfg.Last4)
+	for _, line := range whoamiLines(cfg) {
+		fmt.Println(line)
 	}
 	return 0
+}
+
+// whoamiLines renders `rindler whoami`. The whole job of whoami is "which
+// account is this?", and an opaque Clerk id cannot answer that for anyone with
+// a personal and a work account, or for an operator checking a machine — so we
+// name the account when we know it.
+//
+// The subtlety is that a key carries TWO identities under MODEL B: the ACTOR
+// who signed in (named by Email/AccountClerkUserID) and the SCOPE the key acts
+// within (ClerkUserID, the workspace owner). For a member of someone else's
+// workspace those are different accounts, so pairing the actor's email with the
+// scope id printed "member@corp.com (user_<owner>)" — an email and an id
+// belonging to two different people, which is worse than printing neither. Pair
+// the email only with the actor id, and give the workspace its own labelled line
+// when it differs.
+func whoamiLines(cfg cliConfig) []string {
+	var lines []string
+	switch {
+	case cfg.Email != "" && cfg.AccountClerkUserID != "":
+		lines = append(lines, fmt.Sprintf("%s (%s)", cfg.Email, cfg.AccountClerkUserID))
+	case cfg.Email != "":
+		lines = append(lines, cfg.Email)
+	case cfg.AccountClerkUserID != "":
+		lines = append(lines, cfg.AccountClerkUserID)
+	case cfg.ClerkUserID != "":
+		// Scope only: the sole identity we hold, so print it unqualified rather
+		// than label a workspace we cannot contrast with anything.
+		lines = append(lines, cfg.ClerkUserID)
+	default:
+		lines = append(lines, fmt.Sprintf("logged in (key …%s)", cfg.Last4))
+	}
+	if cfg.ClerkUserID != "" && cfg.ClerkUserID != cfg.AccountClerkUserID && len(lines) > 0 &&
+		lines[0] != cfg.ClerkUserID {
+		lines = append(lines, "workspace: "+cfg.ClerkUserID)
+	}
+	return lines
 }
 
 // runMCP handles `rindler mcp <install|status|remove>`.

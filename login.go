@@ -279,14 +279,15 @@ func runLogin(args []string) int {
 		store = fallback
 	}
 	cfg := cliConfig{
-		APIBase:       *apiBase,
-		AuthorizeBase: *authorizeBase,
-		MCPURL:        tr.MCPURL,
-		Last4:         tr.Last4,
-		ExpiresAt:     tr.ExpiresAt,
-		MapperAccess:  tr.MapperAccess,
-		ClerkUserID:   tr.ClerkUserID,
-		Email:         tr.AccountEmail,
+		APIBase:            *apiBase,
+		AuthorizeBase:      *authorizeBase,
+		MCPURL:             tr.MCPURL,
+		Last4:              tr.Last4,
+		ExpiresAt:          tr.ExpiresAt,
+		MapperAccess:       tr.MapperAccess,
+		ClerkUserID:        tr.ClerkUserID,
+		AccountClerkUserID: tr.AccountClerkUserID,
+		Email:              tr.AccountEmail,
 	}
 	if err := saveConfig(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "failed to save config:", err)
