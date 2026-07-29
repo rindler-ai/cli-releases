@@ -55,13 +55,27 @@ func statusAllAgents() []agentResult {
 	// and sends every agent call somewhere else.
 	want := mcpEndpoint(loadConfigOrEmpty())
 
+	// The KEY matters as much as the URL: a config carrying a revoked or foreign
+	// key looks installed while every tool call 401s, which is the exact
+	// "installed but never connects" case users cannot diagnose.
+	activeKey := ""
+	if store, _, err := newCredentialStore(); err == nil && store != nil {
+		activeKey, _, _ = resolveActiveKey(store)
+	}
+
 	p, present := statusClaudeCode()
-	out = append(out, agentResult{agent: "Claude Code", path: p, ok: present,
-		note: endpointNote(present, installedClaudeURL(), want)})
+	note := endpointNote(present, installedClaudeURL(), want)
+	if present && !installedKeyMatches(installedClaudeKey(), activeKey) {
+		note = keyMismatchNote("Claude Code")
+	}
+	out = append(out, agentResult{agent: "Claude Code", path: p, ok: present, note: note})
 
 	p2, present2 := statusCodex()
-	out = append(out, agentResult{agent: "Codex", path: p2, ok: present2,
-		note: endpointNote(present2, installedCodexURL(), want)})
+	note2 := endpointNote(present2, installedCodexURL(), want)
+	if present2 && !installedKeyMatches(installedCodexKey(), activeKey) {
+		note2 = keyMismatchNote("Codex")
+	}
+	out = append(out, agentResult{agent: "Codex", path: p2, ok: present2, note: note2})
 
 	return out
 }

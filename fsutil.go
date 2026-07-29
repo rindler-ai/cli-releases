@@ -21,13 +21,39 @@ func readFileOrEmpty(path string) ([]byte, error) {
 // file already exists its permission bits are preserved; otherwise defaultPerm is
 // used. Config files that already exist (e.g. a user's ~/.claude.json) keep their
 // own mode rather than being narrowed/widened by us.
+// The write is ATOMIC: temp file in the same directory, fsync, then rename over
+// the target. These are other tools' config files (~/.claude.json holds every
+// project's Claude Code state), so a crash or a full disk partway through a
+// truncating write would destroy data we do not own and cannot restore.
 func writeFilePreservePerm(path string, data []byte, defaultPerm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	perm := defaultPerm
 	if info, err := os.Stat(path); err == nil {
 		perm = info.Mode().Perm()
 	}
-	return os.WriteFile(path, data, perm)
+	tmp, err := os.CreateTemp(dir, ".rindler-*.tmp")
+	if err != nil {
+		// Fall back to the direct write rather than refuse to install.
+		return os.WriteFile(path, data, perm)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

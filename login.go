@@ -186,6 +186,14 @@ func runLogin(args []string) int {
 	apiBase := fs.String("api-base", envOr("RINDLER_API_BASE", defaultAPIBase), "Rindler API origin serving /api/cli/token")
 	timeout := fs.Duration("timeout", 5*time.Minute, "how long to wait for browser approval")
 	if err := fs.Parse(args); err != nil {
+		// `--help` is a successful request for help, not a usage error: exiting 2
+		// to stderr makes `rindler login --help | less` print nothing and trips any
+		// wrapper that treats nonzero as failure.
+		if errors.Is(err, flag.ErrHelp) {
+			fs.SetOutput(os.Stdout)
+			fs.Usage()
+			return 0
+		}
 		return 2
 	}
 

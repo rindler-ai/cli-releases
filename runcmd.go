@@ -251,6 +251,12 @@ func runRun(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: rindler run --site <domain> --action <name> [--action ...] [--input k=v] [--json]")
 		return 2
 	}
+	// Reject a negative --limit rather than pass it through to be coerced. 0 keeps
+	// its documented meaning (the site's default).
+	if *limit < 0 {
+		fmt.Fprintf(os.Stderr, "--limit must be 0 or more (0 = the site's default), got %d\n", *limit)
+		return 2
+	}
 	host, err := siteFromTarget(*site)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "run:", err)
@@ -298,6 +304,15 @@ func runRun(args []string) int {
 		fmt.Printf("Running %s on %s…\njob %s\n", strings.Join(actions, ", "), host, jobID)
 	}
 	if *noWait {
+		// Under --json the ONLY thing on stdout must be JSON: this combination is
+		// exactly what a CI script uses (fire the run, capture the id, poll later),
+		// and prose here left `rindler run ... --no-wait --json | jq -r .job_id`
+		// with nothing to parse. The human hint goes to stderr.
+		if *jsonOut {
+			fmt.Printf("{\"job_id\":%q}\n", jobID)
+			fmt.Fprintf(os.Stderr, "Follow it with: rindler run status %s\n", jobID)
+			return 0
+		}
 		fmt.Printf("Follow it with: rindler run status %s\n", jobID)
 		return 0
 	}
