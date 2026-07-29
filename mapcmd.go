@@ -273,6 +273,13 @@ func runMap(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: rindler map <url> [--mode fast|deep] [--no-wait]")
 		return 2
 	}
+	// Validate --mode rather than let the server coerce it: a typo'd `--mode Deep`
+	// silently downgraded an expensive deep map to a fast one, and the user waited
+	// for (and was billed for) a shallower config than they asked for.
+	if m := strings.ToLower(strings.TrimSpace(*mode)); m != "fast" && m != "deep" {
+		fmt.Fprintf(os.Stderr, "unknown --mode %q (want: fast or deep)\n", *mode)
+		return 2
+	}
 	target, err := normalizeMapTarget(rest[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "map:", err)

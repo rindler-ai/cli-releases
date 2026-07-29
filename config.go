@@ -128,7 +128,11 @@ func (c cliConfig) expiryStatus(now time.Time) (msg string, expired bool) {
 		return "", false
 	}
 	if !now.Before(exp) {
-		return "login expired — run `rindler login`", true
+		// A LOCAL snapshot taken at mint time. The server rolls expires_at forward
+		// while the Clerk session stays alive, so this often reads "expired" for a
+		// key that still works -- and following the advice mints a second key and
+		// leaves the first one live. Say where the claim comes from.
+		return "this machine's copy says the login expired (the server may have extended it) — `rindler doctor` checks with the server; `rindler login` renews", true
 	}
 	if d := exp.Sub(now); d < 3*24*time.Hour {
 		return "login expires soon — run `rindler login` to renew", false
