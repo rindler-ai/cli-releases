@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 )
@@ -24,11 +25,28 @@ func newSystemBackend() (keyringBackend, error) {
 	return macKeyring{}, nil
 }
 
+// securityQuote wraps a value for `security -i`'s own command parser, which
+// splits on whitespace and honors double quotes with backslash escapes.
+func securityQuote(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+	return `"` + r.Replace(s) + `"`
+}
+
 func (macKeyring) set(account, secret string) error {
-	// KNOWN LIMITATION (macOS only): the secret is on argv here (-w); macOS
-	// `security add-generic-password` has no reliable non-argv password input
-	// without the Keychain Services API via cgo, which this no-cgo backend avoids.
-	// -U updates an existing item instead of erroring.
+	// Keep the secret OFF argv. Passing it as `-w <secret>` put the live MCP key
+	// (and the vault master key) in the argv of a `security` process, readable by
+	// any other process of the same user via ps for the duration of the call.
+	// `security -i` reads its command from STDIN instead, so ps sees only
+	// "security -i".
+	cmd := exec.CommandContext(context.Background(), "security", "-i")
+	cmd.Stdin = strings.NewReader(fmt.Sprintf("add-generic-password -U -s %s -a %s -w %s\n",
+		securityQuote(keyringService), securityQuote(account), securityQuote(secret)))
+	if err := runQuiet(cmd); err == nil {
+		return nil
+	}
+	// Fall back to the argv form rather than fail the login outright: an older or
+	// differently-built `security` that cannot do -i should still be able to store
+	// the key. Less private, but working beats broken.
 	return runQuiet(exec.CommandContext(context.Background(), "security", "add-generic-password",
 		"-U", "-s", keyringService, "-a", account, "-w", secret))
 }

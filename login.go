@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -160,6 +161,29 @@ func promptStdin(msg string) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
+// promptStdinCtx reads a line but gives up when ctx expires, so the paste flow
+// reports a friendly timeout instead of letting the deadline surface later as a
+// raw Go transport error on the token exchange. The paste flow explicitly tells
+// you to open the URL "on any device", i.e. walk to your phone -- which is
+// exactly how you exceed the default 5 minutes.
+func promptStdinCtx(ctx context.Context, msg string) (string, error) {
+	type result struct {
+		line string
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		l, e := promptStdin(msg)
+		ch <- result{l, e}
+	}()
+	select {
+	case r := <-ch:
+		return r.line, r.err
+	case <-ctx.Done():
+		return "", fmt.Errorf("timed out waiting for the pasted code — run `rindler login --paste` again")
+	}
+}
+
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -213,7 +237,8 @@ func runLogin(args []string) int {
 	usePaste := *paste || !browserLikelyAvailable()
 	var tr tokenResponse
 	if usePaste {
-		tr, err = pasteLogin(ctx, opts, p, httpc, browserOpener, promptStdin)
+		tr, err = pasteLogin(ctx, opts, p, httpc, browserOpener,
+			func(msg string) (string, error) { return promptStdinCtx(ctx, msg) })
 	} else {
 		tr, err = loopbackLogin(ctx, opts, p, httpc, browserOpener)
 	}
@@ -231,8 +256,27 @@ func runLogin(args []string) int {
 		fmt.Fprintln(os.Stderr, "warning:", warning)
 	}
 	if err := store.setKey(tr.AccessToken); err != nil {
-		fmt.Fprintln(os.Stderr, "failed to store key:", err)
-		return 1
+		// The keyring exists but refused (locked GNOME keyring, an SSH session with
+		// no prompter, a "Deny" on the prompt). Failing here is the worst possible
+		// moment: the authorization code is single-use and already burned, and a
+		// live key was minted server-side, so the user cannot simply retry -- they
+		// would strand a key and start over. Fall back to the 0600 file, loudly.
+		dir, derr := configDir()
+		if derr != nil {
+			fmt.Fprintln(os.Stderr, "failed to store key:", err)
+			return 1
+		}
+		fallback := &fileCredStore{path: filepath.Join(dir, "credentials.json")}
+		if ferr := fallback.setKey(tr.AccessToken); ferr != nil {
+			fmt.Fprintln(os.Stderr, "failed to store key:", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr,
+			"warning: the OS keyring refused to store the key (%v);\n"+
+				"         saved it to %s (0600) instead. Unlock your keyring and\n"+
+				"         re-run `rindler login` if you want it stored there.\n",
+			err, fallback.path)
+		store = fallback
 	}
 	cfg := cliConfig{
 		APIBase:       *apiBase,

@@ -294,7 +294,7 @@ func runUsage(args []string) int {
 	defer res.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(res.Body, 8<<20))
 	if res.StatusCode != http.StatusOK {
-		fmt.Fprintln(os.Stderr, "usage:", runAuthError(res.StatusCode, string(body)))
+		fmt.Fprintln(os.Stderr, "usage:", verbError("usage", res.StatusCode, string(body)))
 		return 1
 	}
 	if *jsonOut {

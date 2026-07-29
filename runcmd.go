@@ -411,7 +411,12 @@ func verbError(verb string, code int, body string) error {
 	case http.StatusForbidden:
 		fix = "this is about the site, not your login: it is not in your catalog and you do not own a config for it"
 	case http.StatusNotFound:
-		fix = "map it first: rindler map <url>"
+		// Only a SITE-scoped verb can be fixed by mapping. Telling someone whose
+		// `usage` read 404'd to map a site sends them to spend a mapping run on a
+		// problem it cannot touch.
+		if verb == "run" || verb == "actions" || verb == "run status" {
+			fix = "map it first: rindler map <url>"
+		}
 	case http.StatusTooManyRequests:
 		fix = "rate limited or out of quota; try again shortly"
 	}
