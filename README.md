@@ -40,6 +40,10 @@ against `SHA256SUMS.txt`, `chmod +x`, and put it on your `PATH`.
 | `rindler status` | Login + MCP-install status |
 | `rindler whoami` | The signed-in account |
 | `rindler mcp install\|status\|remove` | Manage the MCP install only |
+| `rindler creds add\|list\|show\|rm` | Site credentials, encrypted on this device (see Credential vault) |
+| `rindler usage [--workspace] [--days N] [--json]` | Your usage, the same numbers the dashboard shows |
+| `rindler sessions [--json]` | Named browser sessions on this machine |
+| `rindler kill <name>` | End a named session |
 | `rindler doctor` | Diagnose a broken setup and print the fix |
 | `rindler version` | Print the version |
 
@@ -51,8 +55,9 @@ against `SHA256SUMS.txt`, `chmod +x`, and put it on your `PATH`.
   on any device; you paste back the `code#state` it shows. The `state` is
   verified (CSRF).
 
-`--no-map` additionally requests site-mapping capability, granted only if your
-workspace is entitled to it.
+Site-mapping capability is requested by DEFAULT; `--no-map` opts out of it.
+Either way the grant depends on your workspace being entitled to mapping, and
+`rindler status` reports which one you got.
 
 ### Two credential lanes
 
