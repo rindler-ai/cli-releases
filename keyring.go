@@ -44,6 +44,24 @@ type credentialStore interface {
 	delNamed(name string) error
 }
 
+// allCredentialStores returns EVERY backend a key could be sitting in, not just
+// the one this run prefers. Which backend newCredentialStore picks depends on an
+// external binary being on PATH, so a key written by an earlier run can be in the
+// other one. Logout must sweep both: revoking only the preferred store leaves a
+// live key on disk while printing success.
+func allCredentialStores() ([]credentialStore, error) {
+	dir, err := configDir()
+	if err != nil {
+		return nil, err
+	}
+	stores := []credentialStore{&fileCredStore{path: filepath.Join(dir, "credentials.json")}}
+	if kb, kerr := newSystemBackend(); kerr == nil {
+		// Keyring first: it is the preferred home when it exists.
+		stores = append([]credentialStore{&keyringCredStore{kb: kb}}, stores...)
+	}
+	return stores, nil
+}
+
 // newCredentialStore selects the OS keyring when available, else the 0600 file
 // fallback. warning is non-empty when it fell back, so the caller can surface it.
 func newCredentialStore() (store credentialStore, warning string, err error) {

@@ -73,30 +73,96 @@ func vaultPath() (string, error) {
 	return filepath.Join(dir, vaultFileName), nil
 }
 
+// decodeVaultKey accepts a base64 master key only if it is exactly 32 bytes.
+func decodeVaultKey(raw string) ([]byte, bool) {
+	k, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil || len(k) != 32 {
+		return nil, false
+	}
+	return k, true
+}
+
+// errVaultKeyUnavailable is returned when a vault already holds records but its
+// master key cannot be found (or the keyring refused to answer). Minting a fresh
+// key here would silently render every stored credential permanently unreadable,
+// so we fail loudly instead and let the user fix the real problem (unlock the
+// keyring, restore the key file) with the data still intact.
+var errVaultKeyUnavailable = errors.New(
+	"the vault master key could not be read, and this vault already holds credentials.\n" +
+		"Refusing to create a new key: that would make the stored credentials unreadable.\n" +
+		"If your OS keyring is locked, unlock it and retry. To start over, delete\n" +
+		"credentials.vault.json and re-add the credentials.")
+
+// vaultKeyLocations returns every place a master key can legitimately live, in
+// preference order. BOTH backends are probed on every call: whether the keyring
+// backend is selected depends on an external binary being on PATH
+// (newSystemBackend), so the key a previous run wrote is not necessarily in the
+// backend this run prefers. Probing one and minting on a miss is what destroys a
+// vault, so the lookup is exhaustive and the mint is guarded.
+func vaultKeyLocations(store credentialStore, dir string) []func() (string, error) {
+	var probes []func() (string, error)
+	if store != nil {
+		probes = append(probes, func() (string, error) { return store.getNamed(vaultKeyringEntry) })
+	}
+	// The file store's named entry, even when a keyring is currently preferred.
+	fileStore := &fileCredStore{path: filepath.Join(dir, "credentials.json")}
+	probes = append(probes, func() (string, error) { return fileStore.getNamed(vaultKeyringEntry) })
+	// The standalone key file.
+	probes = append(probes, func() (string, error) {
+		b, err := os.ReadFile(filepath.Join(dir, vaultKeyFileName))
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "", nil
+			}
+			return "", err
+		}
+		return string(b), nil
+	})
+	return probes
+}
+
 // vaultMasterKey returns the 32-byte key, creating it on first use. The keyring
 // is preferred; the file fallback is reported to the caller so the CLI can say
 // so out loud rather than silently downgrading.
+//
+// It NEVER mints a new key over an existing vault. A miss is only treated as
+// "first use" when the vault holds no records AND no probe errored: a keyring
+// that is merely locked returns an error, not absence, and treating that as
+// absence would destroy the vault it was protecting.
 func vaultMasterKey() (key []byte, warning string, err error) {
 	store, storeWarn, err := newCredentialStore()
-	if err == nil && store != nil {
-		if raw, gerr := store.getNamed(vaultKeyringEntry); gerr == nil && raw != "" {
-			k, derr := base64.StdEncoding.DecodeString(raw)
-			if derr == nil && len(k) == 32 {
-				return k, storeWarn, nil
-			}
-		}
+	if err != nil {
+		store = nil
 	}
-
 	dir, err := configDir()
 	if err != nil {
 		return nil, "", err
 	}
-	keyFile := filepath.Join(dir, vaultKeyFileName)
-	if b, rerr := os.ReadFile(keyFile); rerr == nil {
-		k, derr := base64.StdEncoding.DecodeString(strings.TrimSpace(string(b)))
-		if derr == nil && len(k) == 32 {
-			return k, "vault key is stored in a 0600 file (no OS keyring available)", nil
+
+	probeFailed := false
+	for _, probe := range vaultKeyLocations(store, dir) {
+		raw, perr := probe()
+		if perr != nil {
+			// A backend that ERRORED has not told us the key is absent. Remember
+			// that, so a locked keyring can never be read as "no key yet".
+			probeFailed = true
+			continue
 		}
+		if raw == "" {
+			continue
+		}
+		if k, ok := decodeVaultKey(raw); ok {
+			return k, storeWarn, nil
+		}
+	}
+
+	// No key found. Only mint when this is genuinely first use.
+	hasRecords, rerr := vaultHasRecords()
+	if rerr != nil {
+		return nil, "", rerr
+	}
+	if hasRecords || probeFailed {
+		return nil, "", errVaultKeyUnavailable
 	}
 
 	k := make([]byte, 32)
@@ -112,10 +178,20 @@ func vaultMasterKey() (key []byte, warning string, err error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, "", err
 	}
-	if err := os.WriteFile(keyFile, []byte(enc), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, vaultKeyFileName), []byte(enc), 0o600); err != nil {
 		return nil, "", fmt.Errorf("write vault key: %w", err)
 	}
 	return k, "vault key is stored in a 0600 file (no OS keyring available)", nil
+}
+
+// vaultHasRecords reports whether the vault file holds at least one credential.
+// A missing/unreadable vault file means "no records", so first use still works.
+func vaultHasRecords() (bool, error) {
+	vf, err := loadVault()
+	if err != nil {
+		return false, nil
+	}
+	return len(vf.Records) > 0, nil
 }
 
 func vaultSeal(key []byte, site string, s vaultSecret) (nonceB64, cipherB64 string, err error) {
