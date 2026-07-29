@@ -497,6 +497,14 @@ func runJob(ctx context.Context, httpc *http.Client, apiBase, key, jobID string)
 	}
 	defer res.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(res.Body, 4<<20))
+	// `--json` prints the raw JOB envelope, so it has to be captured HERE (the
+	// poll), not only at the start call. Setting it only on the start path left
+	// `run status --json` printing an empty line and `run --json` printing the
+	// start stub instead of the job -- i.e. the machine-readable interface of the
+	// primary verb was dead.
+	if res.StatusCode == http.StatusOK {
+		lastJobBody = body
+	}
 	if res.StatusCode != http.StatusOK {
 		// A 404 HERE is an unknown JOB, not an unknown site. run's mapper answers
 		// 404 with "map it first: rindler map <url>", which sends someone to map a
@@ -772,6 +780,12 @@ func startRunInSession(
 		fmt.Fprintf(os.Stderr, "• session %q had expired; starting a fresh one\n", name)
 		jobID, err = startRunWithSession(
 			ctx, httpc, apiBase, key, site, actions, inputs, mode, limit, "", true)
+		// The retry opened a NEW browser, so the id we came in with is dead.
+		// Leaving it set would re-bind the name to the id we just unbound, and
+		// every later `--session <name>` would re-attach to a corpse and retry
+		// again -- a named session that never reuses a browser after its first
+		// idle-reap. Fall through to the discover-the-fresh-id path instead.
+		bound = ""
 	}
 	if err != nil {
 		return "", "", err

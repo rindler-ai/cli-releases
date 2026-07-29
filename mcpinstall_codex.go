@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,14 +56,67 @@ func isTOMLTableHeader(line string) bool {
 	return strings.HasPrefix(strings.TrimSpace(line), "[")
 }
 
+// errCodexForeignRindler means config.toml already defines a rindler server in a
+// spelling this writer does not rewrite (a quoted header, an inline table under
+// [mcp_servers], or dotted keys). Appending our canonical table next to it would
+// produce a DUPLICATE KEY, which makes the whole file unparseable and stops Codex
+// starting at all -- so we refuse and let the user resolve it.
+var errCodexForeignRindler = errors.New(
+	"~/.codex/config.toml already defines a `rindler` MCP server in a form this\n" +
+		"installer does not rewrite (a quoted header, an inline table, or dotted keys).\n" +
+		"Adding ours would create a duplicate key and stop Codex from starting.\n" +
+		"Remove the existing rindler entry, then re-run `rindler mcp install`.")
+
+// codexForeignRindlerDefined reports whether a rindler server is defined in a
+// spelling other than our canonical [mcp_servers.rindler] header. TOML accepts
+// several, and an exact header match alone silently missed them.
+func codexForeignRindlerDefined(lines []string) bool {
+	inMCPServers := false
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		if isTOMLTableHeader(t) {
+			if t == codexTableHeader {
+				// Canonical: handled by the replace path, not foreign.
+				inMCPServers = false
+				continue
+			}
+			// A quoted/whitespaced variant of the same table.
+			squashed := strings.NewReplacer(" ", "", `"`, "", "'", "").Replace(t)
+			if squashed == "[mcp_servers.rindler]" {
+				return true
+			}
+			inMCPServers = squashed == "[mcp_servers]"
+			continue
+		}
+		// A `rindler = { ... }` inline table inside [mcp_servers].
+		if inMCPServers {
+			k := strings.TrimSpace(strings.SplitN(t, "=", 2)[0])
+			if strings.Trim(k, `"'`) == "rindler" {
+				return true
+			}
+		}
+		// A top-level dotted key: mcp_servers.rindler.url = "..."
+		if strings.HasPrefix(strings.NewReplacer(" ", "", `"`, "", "'", "").Replace(t), "mcp_servers.rindler.") {
+			return true
+		}
+	}
+	return false
+}
+
 // upsertCodexTOML inserts or replaces the [mcp_servers.rindler] table, preserving
-// all other content.
-func upsertCodexTOML(existing []byte, mcpURL, key string) []byte {
+// all other content. It refuses rather than emit a duplicate-key file.
+func upsertCodexTOML(existing []byte, mcpURL, key string) ([]byte, error) {
 	block := codexBlock(mcpURL, key)
 	if len(existing) == 0 {
-		return []byte(block + "\n")
+		return []byte(block + "\n"), nil
 	}
 	lines := strings.Split(strings.TrimRight(string(existing), "\n"), "\n")
+	if codexForeignRindlerDefined(lines) {
+		return nil, errCodexForeignRindler
+	}
 	start := -1
 	for i, l := range lines {
 		if strings.TrimSpace(l) == codexTableHeader {
@@ -72,7 +126,7 @@ func upsertCodexTOML(existing []byte, mcpURL, key string) []byte {
 	}
 	if start == -1 {
 		// Append a blank separator + our block.
-		return []byte(strings.Join(lines, "\n") + "\n\n" + block + "\n")
+		return []byte(strings.Join(lines, "\n") + "\n\n" + block + "\n"), nil
 	}
 	// The table runs until the next table header (or EOF).
 	end := len(lines)
@@ -85,7 +139,7 @@ func upsertCodexTOML(existing []byte, mcpURL, key string) []byte {
 	out := append([]string{}, lines[:start]...)
 	out = append(out, strings.Split(block, "\n")...)
 	out = append(out, lines[end:]...)
-	return []byte(strings.Join(out, "\n") + "\n")
+	return []byte(strings.Join(out, "\n") + "\n"), nil
 }
 
 // removeCodexTOML deletes the [mcp_servers.rindler] table if present.
@@ -144,7 +198,11 @@ func installCodex(mcpURL, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := writeFilePreservePerm(p, upsertCodexTOML(existing, mcpURL, key), 0o600); err != nil {
+	merged, err := upsertCodexTOML(existing, mcpURL, key)
+	if err != nil {
+		return "", err
+	}
+	if err := writeFilePreservePerm(p, merged, 0o600); err != nil {
 		return "", err
 	}
 	return p, nil
