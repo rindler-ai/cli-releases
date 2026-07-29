@@ -146,28 +146,50 @@ func runLogout(args []string) int {
 		return 1
 	}
 	// Best-effort server-side revoke of the stored key (never the env key).
-	if key, _ := store.getKey(); key != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		apiBase := cfg.APIBase
-		if apiBase == "" {
-			apiBase = defaultAPIBase
+	//
+	// Sweep EVERY backend, not just the preferred one. Which store is preferred
+	// depends on an external binary being on PATH, so a key minted by an earlier
+	// run can be sitting in the other backend; revoking only the preferred store
+	// would leave a live key on disk while still printing "Logged out".
+	stores, serr := allCredentialStores()
+	if serr != nil || len(stores) == 0 {
+		stores = []credentialStore{store}
+	}
+	apiBase := cfg.APIBase
+	if apiBase == "" {
+		apiBase = defaultAPIBase
+	}
+	revokedAny, seen := false, map[string]bool{}
+	for _, st := range stores {
+		key, _ := st.getKey()
+		if key == "" || seen[key] {
+			continue
 		}
-		switch outcome, _ := revokeSelf(ctx, defaultHTTPClient(), apiBase, key); outcome {
+		seen[key] = true
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		outcome, _ := revokeSelf(ctx, defaultHTTPClient(), apiBase, key)
+		cancel()
+		switch outcome {
 		case revokeDone:
 			fmt.Println("✓ Key revoked server-side.")
+			revokedAny = true
 		case revokeNothingToDo:
 			// Also a success, and the common one after a few days away: the key
 			// lapsed with its Clerk session, so there was nothing live to retire.
 			// Saying "revoked" would claim an action nobody took, and warning
 			// would report a problem that does not exist.
 			fmt.Println("✓ Key was already expired server-side; nothing to revoke.")
+			revokedAny = true
 		default:
 			fmt.Println("• Could not revoke remotely (it expires with your Clerk session, or revoke it in the dashboard).")
 		}
 	}
-	if err := store.delKey(); err != nil {
-		fmt.Fprintln(os.Stderr, "warning: could not clear keyring:", err)
+	_ = revokedAny
+	// Clear the key from every backend, so logout never leaves one behind.
+	for _, st := range stores {
+		if err := st.delKey(); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: could not clear stored key:", err)
+		}
 	}
 	if err := clearConfig(); err != nil {
 		fmt.Fprintln(os.Stderr, "warning: could not clear config:", err)

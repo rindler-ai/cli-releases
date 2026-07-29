@@ -12,6 +12,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -43,18 +44,39 @@ func runCreds(args []string) int {
 
 // readSecret takes the password from a TTY prompt when there is one, and from
 // stdin otherwise so the command stays scriptable (`echo pw | rindler creds add`).
+//
+// On a TTY the terminal's echo is turned OFF for the duration of the read, so
+// the password never reaches the screen, scrollback, tmux buffers or an
+// asciinema/script recording. If echo cannot be disabled we refuse to prompt
+// rather than render the secret: a password on screen is not a smaller failure
+// than an error message.
 func readSecret(prompt string) (string, error) {
 	fi, err := os.Stdin.Stat()
 	piped := err == nil && (fi.Mode()&os.ModeCharDevice) == 0
-	if !piped {
-		fmt.Fprint(os.Stderr, prompt)
+	if piped {
+		line, rerr := bufio.NewReader(os.Stdin).ReadString('\n')
+		if rerr != nil && rerr != io.EOF {
+			return "", rerr
+		}
+		return strings.TrimRight(line, "\r\n"), nil
 	}
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && err != io.EOF {
-		return "", err
-	}
-	if !piped {
+
+	fmt.Fprint(os.Stderr, prompt)
+	var line string
+	rerr := withEchoDisabled(os.Stdin, func() error {
+		l, e := bufio.NewReader(os.Stdin).ReadString('\n')
+		if e != nil && e != io.EOF {
+			return e
+		}
+		line = l
+		return nil
+	})
+	if errors.Is(rerr, errEchoUnavailable) {
 		fmt.Fprintln(os.Stderr)
+		return "", fmt.Errorf("cannot hide the password on this terminal; pipe it instead: echo 'password' | rindler creds add <site> --username <user>")
+	}
+	if rerr != nil {
+		return "", rerr
 	}
 	return strings.TrimRight(line, "\r\n"), nil
 }
