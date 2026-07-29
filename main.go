@@ -268,7 +268,14 @@ func runWhoami() int {
 		fmt.Fprintln(os.Stderr, "not logged in")
 		return 1
 	}
-	if cfg.ClerkUserID != "" {
+	// Name the ACCOUNT when we know it. The whole job of whoami is "which account
+	// is this?", and an opaque Clerk id cannot answer that for anyone with a
+	// personal and a work account, or for an operator checking a machine.
+	if cfg.Email != "" && cfg.ClerkUserID != "" {
+		fmt.Printf("%s (%s)\n", cfg.Email, cfg.ClerkUserID)
+	} else if cfg.Email != "" {
+		fmt.Println(cfg.Email)
+	} else if cfg.ClerkUserID != "" {
 		fmt.Println(cfg.ClerkUserID)
 	} else {
 		fmt.Printf("logged in (key …%s)\n", cfg.Last4)

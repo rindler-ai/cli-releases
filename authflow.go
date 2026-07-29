@@ -31,6 +31,7 @@ type tokenResponse struct {
 	ExpiresAt    string `json:"expires_at"`
 	MapperAccess bool   `json:"mapper_access"`
 	ClerkUserID  string `json:"clerk_user_id"`
+	AccountEmail string `json:"account_email"`
 	MCPURL       string `json:"mcp_url"`
 }
 

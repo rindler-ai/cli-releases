@@ -286,6 +286,7 @@ func runLogin(args []string) int {
 		ExpiresAt:     tr.ExpiresAt,
 		MapperAccess:  tr.MapperAccess,
 		ClerkUserID:   tr.ClerkUserID,
+		Email:         tr.AccountEmail,
 	}
 	if err := saveConfig(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "failed to save config:", err)
