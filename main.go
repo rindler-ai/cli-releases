@@ -155,10 +155,9 @@ func runLogout(args []string) int {
 	if serr != nil || len(stores) == 0 {
 		stores = []credentialStore{store}
 	}
-	apiBase := cfg.APIBase
-	if apiBase == "" {
-		apiBase = defaultAPIBase
-	}
+	// resolveAPIBase so RINDLER_API_BASE is honored here too: logging out of a
+	// dev/self-hosted lane must revoke against THAT lane, not production.
+	apiBase := resolveAPIBase("", cfg)
 	revokedAny, seen := false, map[string]bool{}
 	for _, st := range stores {
 		key, _ := st.getKey()

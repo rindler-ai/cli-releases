@@ -343,14 +343,12 @@ func runMapStatus(args []string) int {
 		fmt.Fprintln(os.Stderr, "not logged in — run `rindler login` first (or set RINDLER_API_KEY)")
 		return 1
 	}
-	apiBase := *apiBaseFlag
-	if apiBase == "" {
-		apiBase = cfg.APIBase
-	}
-	if apiBase == "" {
-		apiBase = defaultAPIBase
-	}
-	apiBase = strings.TrimRight(apiBase, "/")
+	// resolveAPIBase, NOT a hand-rolled chain: this one skipped
+	// RINDLER_API_BASE, so `map status` sent the Bearer key to PRODUCTION even
+	// when every other verb was pointed at a dev/self-hosted lane -- and it is the
+	// exact command the CLI tells you to run after --no-wait and after every
+	// follow timeout.
+	apiBase := resolveAPIBase(*apiBaseFlag, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()

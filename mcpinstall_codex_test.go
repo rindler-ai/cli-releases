@@ -8,7 +8,7 @@ import (
 const mcpURL = "https://mcp.rindler.ai/mcp"
 
 func TestCodexUpsertEmpty(t *testing.T) {
-	out := string(upsertCodexTOML(nil, mcpURL, "rindler_live_k"))
+	out := mustUpsertCodex(t, nil, mcpURL, "rindler_live_k")
 	want := "[mcp_servers.rindler]\n" +
 		"url = \"https://mcp.rindler.ai/mcp\"\n" +
 		"http_headers = { \"Authorization\" = \"Bearer rindler_live_k\" }\n"
@@ -25,7 +25,7 @@ model = "gpt-5"
 command = "foo"
 args = ["--bar"]
 `)
-	out := string(upsertCodexTOML(existing, mcpURL, "k1"))
+	out := mustUpsertCodex(t, existing, mcpURL, "k1")
 	// Everything preserved.
 	for _, must := range []string{"# my codex config", `model = "gpt-5"`, "[mcp_servers.other]", `command = "foo"`} {
 		if !strings.Contains(out, must) {
@@ -36,7 +36,7 @@ args = ["--bar"]
 		t.Errorf("rindler table not appended:\n%s", out)
 	}
 	// Idempotent.
-	out2 := string(upsertCodexTOML([]byte(out), mcpURL, "k1"))
+	out2 := mustUpsertCodex(t, []byte(out), mcpURL, "k1")
 	if out != out2 {
 		t.Errorf("not idempotent:\n%q\nvs\n%q", out, out2)
 	}
@@ -50,7 +50,7 @@ http_headers = { "Authorization" = "Bearer OLDKEY" }
 [mcp_servers.keep]
 command = "keep"
 `)
-	out := string(upsertCodexTOML(existing, mcpURL, "NEWKEY"))
+	out := mustUpsertCodex(t, existing, mcpURL, "NEWKEY")
 	if strings.Contains(out, "OLDKEY") || strings.Contains(out, "old.example") {
 		t.Errorf("old table not replaced:\n%s", out)
 	}
@@ -107,4 +107,16 @@ func TestTOMLEscape(t *testing.T) {
 	if got := tomlEscape(`a"b\c`); got != `a\"b\\c` {
 		t.Errorf("escape = %q", got)
 	}
+}
+
+// mustUpsertCodex is the test helper for the (bytes, error) signature: the
+// duplicate-key refusal is covered by its own test, so these cases assert on the
+// happy path.
+func mustUpsertCodex(t *testing.T, existing []byte, mcpURL, key string) string {
+	t.Helper()
+	b, err := upsertCodexTOML(existing, mcpURL, key)
+	if err != nil {
+		t.Fatalf("upsertCodexTOML: %v", err)
+	}
+	return string(b)
 }

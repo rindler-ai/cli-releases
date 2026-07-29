@@ -23,12 +23,12 @@ func installAllAgents(mcpURL, key string) []agentResult {
 	p, err := installClaudeCode(mcpURL, key)
 	out = append(out, agentResult{agent: "Claude Code", path: p, ok: err == nil, err: err})
 
+	// No note on success. This used to tell every user to add
+	// `experimental_use_rmcp_client = true`, a key Codex no longer has (and whose
+	// class has hard-failed Codex startup), so a clean install permanently read as
+	// half-broken while handing out advice that could break the thing it "fixed".
 	p2, err2 := installCodex(mcpURL, key)
-	note := ""
-	if err2 == nil {
-		note = "if Codex doesn't pick it up, add `experimental_use_rmcp_client = true` to the top of the file or upgrade Codex"
-	}
-	out = append(out, agentResult{agent: "Codex", path: p2, ok: err2 == nil, note: note, err: err2})
+	out = append(out, agentResult{agent: "Codex", path: p2, ok: err2 == nil, err: err2})
 
 	return out
 }
