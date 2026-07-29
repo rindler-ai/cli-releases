@@ -38,7 +38,7 @@ against `SHA256SUMS.txt`, `chmod +x`, and put it on your `PATH`.
 | `rindler map status <job-id> [--once]` | Follow a run you already started |
 | `rindler logout` | Best-effort server-side revoke, then clear local + agent config |
 | `rindler status` | Login + MCP-install status |
-| `rindler whoami` | The signed-in account |
+| `rindler whoami` | The signed-in account, plus a `workspace:` line when the key acts in a workspace you do not own |
 | `rindler mcp install\|status\|remove` | Manage the MCP install only |
 | `rindler creds add\|list\|show\|rm` | Site credentials, encrypted on this device (see Credential vault) |
 | `rindler usage [--workspace] [--days N] [--json]` | Your usage, the same numbers the dashboard shows |

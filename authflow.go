@@ -30,9 +30,15 @@ type tokenResponse struct {
 	Last4        string `json:"last4"`
 	ExpiresAt    string `json:"expires_at"`
 	MapperAccess bool   `json:"mapper_access"`
-	ClerkUserID  string `json:"clerk_user_id"`
-	AccountEmail string `json:"account_email"`
-	MCPURL       string `json:"mcp_url"`
+	// ClerkUserID is the key's SCOPE: the workspace owner. Under MODEL B this is
+	// NOT the signer whenever the signer is a member of someone else's workspace.
+	ClerkUserID string `json:"clerk_user_id"`
+	// AccountClerkUserID is the ACTOR: the account that actually signed in, and
+	// the one AccountEmail names. Absent on servers older than the field, which
+	// is why whoami never assumes it equals ClerkUserID.
+	AccountClerkUserID string `json:"account_clerk_user_id"`
+	AccountEmail       string `json:"account_email"`
+	MCPURL             string `json:"mcp_url"`
 }
 
 // oauthError is the RFC 6749 §5.2 error body.
