@@ -149,30 +149,49 @@ type creditsResponse struct {
 	} `json:"workspace_credit,omitempty"`
 }
 
+// creditsRead is what the balance read produced. A FAILED read and a read the
+// credential is not entitled to make are different facts with different advice,
+// and collapsing them into one nil was the bug: /api/entitlements/self sits
+// behind the first-party JWT lane (AllowedPurposes first_party/merchant), which
+// a rindler_live_ key can never satisfy, so EVERY `rindler usage` run reported a
+// transient-sounding "could not read your balance" for a permanent condition and
+// sent people looking for an outage.
+type creditsRead struct {
+	resp *creditsResponse
+	// unauthorized means the server refused this credential outright (401/403).
+	// For a CLI key that is structural, not a blip.
+	unauthorized bool
+}
+
 // fetchCredits reads the balance. Best-effort by design: usage numbers are
-// worth printing on their own, so a credits read that fails degrades to
-// omitting that line rather than failing the command.
-func fetchCredits(ctx context.Context, apiBase, key string) *creditsResponse {
+// worth printing on their own, so a credits read that fails degrades to a note
+// rather than failing the command. The call is kept (rather than skipped for
+// CLI keys) so the balance lights up on its own if the server later admits
+// them; only the REPORTING distinguishes the two failure modes.
+func fetchCredits(ctx context.Context, apiBase, key string) creditsRead {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		strings.TrimRight(apiBase, "/")+"/api/entitlements/self", nil)
 	if err != nil {
-		return nil
+		return creditsRead{}
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	res, err := defaultHTTPClient().Do(req)
 	if err != nil {
-		return nil
+		return creditsRead{}
 	}
 	defer res.Body.Close()
+	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+		return creditsRead{unauthorized: true}
+	}
 	if res.StatusCode != http.StatusOK {
-		return nil
+		return creditsRead{}
 	}
 	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	var c creditsResponse
 	if json.Unmarshal(body, &c) != nil {
-		return nil
+		return creditsRead{}
 	}
-	return &c
+	return creditsRead{resp: &c}
 }
 
 // creditBar renders remaining/allotment. Clamped at both ends so an over-spend
@@ -224,8 +243,15 @@ func daysLeft(remaining int64, burn float64) int {
 	return d
 }
 
-func printCredits(w io.Writer, c *creditsResponse) {
+func printCredits(w io.Writer, r creditsRead) {
 	fmt.Fprintln(w)
+	if r.unauthorized {
+		// Permanent for this credential, so say so and point somewhere useful
+		// instead of describing a failure the reader could wait out.
+		fmt.Fprintln(w, "  credits  balance isn't readable with a CLI key — see the dashboard")
+		return
+	}
+	c := r.resp
 	if c == nil {
 		fmt.Fprintln(w, "  credits  (could not read your balance)")
 		return
@@ -327,7 +353,7 @@ func runUsage(args []string) int {
 	// endpoint, and one failing must not take the other's numbers down with it.
 	credits := fetchCredits(ctx, apiBase, key)
 	printCredits(os.Stdout, credits)
-	printBurn(os.Stdout, u, credits, scope)
+	printBurn(os.Stdout, u, credits.resp, scope)
 	printSelfShape(os.Stdout, u)
 	printDisclosures(os.Stdout, u)
 	return 0

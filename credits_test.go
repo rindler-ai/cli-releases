@@ -21,7 +21,7 @@ func TestAnUnknownBalanceIsNotReportedAsZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b strings.Builder
-	printCredits(&b, &c)
+	printCredits(&b, creditsRead{resp: &c})
 	out := b.String()
 	if strings.Contains(out, "0 of 0") || strings.Contains(out, "0 used") {
 		t.Fatalf("an unreadable balance rendered as a real zero:\n%s", out)
@@ -36,7 +36,7 @@ func TestAKnownBalanceRendersTheNumbers(t *testing.T) {
 	_ = json.Unmarshal([]byte(
 		`{"pool":"workspace","workspace_credit":{"known":true,"remaining":975,"allotment":1000,"used":25}}`), &c)
 	var b strings.Builder
-	printCredits(&b, &c)
+	printCredits(&b, creditsRead{resp: &c})
 	out := b.String()
 	for _, want := range []string{"975", "1000", "#"} {
 		if !strings.Contains(out, want) {
@@ -51,7 +51,7 @@ func TestAPersonalPoolSaysSoRatherThanLookingBroken(t *testing.T) {
 	var c creditsResponse
 	_ = json.Unmarshal([]byte(`{"pool":"personal"}`), &c)
 	var b strings.Builder
-	printCredits(&b, &c)
+	printCredits(&b, creditsRead{resp: &c})
 	if !strings.Contains(b.String(), "personal") {
 		t.Errorf("a personal pool was not named:\n%s", b.String())
 	}
@@ -60,11 +60,15 @@ func TestAPersonalPoolSaysSoRatherThanLookingBroken(t *testing.T) {
 // Credits are a SECOND read against a DIFFERENT endpoint. It failing must not
 // take the usage numbers down with it.
 func TestACreditsFailureDoesNotHideYourUsage(t *testing.T) {
-	if got := fetchCredits(context.Background(), "https://nonexistent.invalid", "k"); got != nil {
+	got := fetchCredits(context.Background(), "https://nonexistent.invalid", "k")
+	if got.resp != nil {
 		t.Fatal("an unreachable host must yield no credits, not a fabricated zero")
 	}
+	if got.unauthorized {
+		t.Error("an unreachable host is a transient failure, not an entitlement refusal")
+	}
 	var b strings.Builder
-	printCredits(&b, nil)
+	printCredits(&b, creditsRead{})
 	if !strings.Contains(b.String(), "could not read") {
 		t.Errorf("a failed read must say so:\n%s", b.String())
 	}
@@ -76,8 +80,12 @@ func TestFetchCreditsRefusesANon200(t *testing.T) {
 		_, _ = w.Write([]byte(`{"workspace_credit":{"known":true,"remaining":999999}}`))
 	}))
 	defer srv.Close()
-	if got := fetchCredits(context.Background(), srv.URL, "k"); got != nil {
+	got := fetchCredits(context.Background(), srv.URL, "k")
+	if got.resp != nil {
 		t.Fatal("a 403 body must not be read as a balance")
+	}
+	if !got.unauthorized {
+		t.Error("a 403 is an entitlement refusal and must be reported as one")
 	}
 }
 
@@ -87,5 +95,44 @@ func TestCreditBarIsClamped(t *testing.T) {
 		if len(got) > 24 || strings.Contains(got, "-1") {
 			t.Fatalf("creditBar(%d,%d) = %q", tc.remaining, tc.total, got)
 		}
+	}
+}
+
+// The defect: /api/entitlements/self sits behind the first-party JWT lane
+// (AllowedPurposes first_party/merchant), which a rindler_live_ CLI key can
+// never satisfy — verified against prod on 2026-07-29, where the same key was
+// 200 on /mcp and /api/workspace/usage/me but 401 here. So this branch is what
+// EVERY `rindler usage` run hits, and it used to say "could not read your
+// balance": a permanent condition worded as a transient one, which sends the
+// reader looking for an outage that does not exist.
+func TestAnUnauthorizedBalanceReadIsNotReportedAsTransient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer srv.Close()
+	got := fetchCredits(context.Background(), srv.URL, "rindler_live_whatever")
+	if !got.unauthorized {
+		t.Fatal("a 401 must be recorded as an entitlement refusal, not a generic miss")
+	}
+	var b strings.Builder
+	printCredits(&b, got)
+	out := b.String()
+	if strings.Contains(out, "could not read") || strings.Contains(out, "temporarily") {
+		t.Errorf("a permanent refusal must not be worded as a transient failure:\n%s", out)
+	}
+	if !strings.Contains(out, "CLI key") {
+		t.Errorf("the reader should learn WHY the balance is absent:\n%s", out)
+	}
+}
+
+// The two failure modes must stay distinguishable: a real outage keeps the
+// transient wording, so making the 401 case honest does not silence a genuine
+// blip.
+func TestATransientFailureKeepsItsOwnWording(t *testing.T) {
+	var b strings.Builder
+	printCredits(&b, creditsRead{})
+	if !strings.Contains(b.String(), "could not read") {
+		t.Errorf("a transient failure must still say so:\n%s", b.String())
 	}
 }
