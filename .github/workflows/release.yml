@@ -27,10 +27,23 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      # Check out the TAG being released, not the default branch. Without this
+      # a workflow_dispatch run publishes whatever is on main under the tag's
+      # version string, which has already shipped one mislabelled binary.
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
+
+      # Nothing else gates publishing: /dl serves releases/latest within ~60s of
+      # a tag push, so a red commit would reach every new install. Re-run the
+      # suite against the exact tagged tree before anything is built.
+      - name: Verify the tagged commit
+        run: |
+          go vet ./...
+          go test ./...
 
       - name: Cross-compile
         env:
