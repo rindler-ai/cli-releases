@@ -104,7 +104,7 @@ Usage:
   rindler run --site <d> --action <a> [--limit N] [--session <name>]
                                                  Run actions against a site and follow the job
   rindler run status <job-id> [--once]          Follow a run you already started
-  rindler sites                                  List the sites you can act on
+  rindler sites                                  List the sites you can act on\n  rindler sites add <domain>                     Track a site for your workspace
   rindler actions <site>                         Show a site's actions and their inputs
   rindler map <url> [--mode fast|deep]           Map a site and follow the run to a verdict
   rindler map status <job-id> [--once]           Follow a run you already started

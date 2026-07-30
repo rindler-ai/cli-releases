@@ -31,6 +31,7 @@ against `SHA256SUMS.txt`, `chmod +x`, and put it on your `PATH`.
 |---|---|
 | `rindler login [--paste] [--no-map] [--no-mcp]` | Sign in, mint a session-bound key, install the MCP into Claude Code + Codex |
 | `rindler sites` | List the sites you can act on |
+| `rindler sites add <domain>` | Track a site for your workspace, so everyone on it can act on the site |
 | `rindler actions <site>` | Show a site's actions and the inputs each takes |
 | `rindler run --site <d> --action <a> [--input k=v]` | Run actions against a site and follow the job |
 | `rindler run status <job-id> [--once]` | Follow a run you already started |
