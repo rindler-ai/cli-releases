@@ -140,10 +140,22 @@ func runSitesAdd(args []string) int {
 	}
 	// Accept a full URL as well as a bare host, the same as `actions` and `map`:
 	// people paste what is in the address bar.
-	domain, err := siteFromTarget(rest[0])
+	raw := strings.TrimSpace(rest[0])
+	domain, err := siteFromTarget(raw)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sites add:", err)
 		return 2
+	}
+	// Send the URL the caller actually typed, when they typed one. A site the
+	// catalog already has is reusable from the bare domain, but a site we have
+	// never mapped needs a FRESH CRAWL, and the server refuses to start one from
+	// a normalized host: a bare domain may have discarded the tenant or vendor
+	// path that identifies the real target, and mapping the bare platform
+	// instead is worse than refusing. So preserve the full target verbatim
+	// rather than reconstructing https://<host> and pretending it was given.
+	fullURL := ""
+	if strings.Contains(raw, "://") || strings.Contains(raw, "/") {
+		fullURL = raw
 	}
 	key, apiBase, code := resolveKeyAndBase(*apiBaseFlag, "sites add")
 	if code != 0 {
@@ -152,7 +164,11 @@ func runSitesAdd(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	payload, err := json.Marshal(map[string]string{"domain": domain, "source": "requested"})
+	body := map[string]string{"domain": domain, "source": "requested"}
+	if fullURL != "" {
+		body["url"] = fullURL
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sites add:", err)
 		return 1
@@ -171,13 +187,23 @@ func runSitesAdd(args []string) int {
 		return 1
 	}
 	defer res.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	respBody, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
-		fmt.Fprintln(os.Stderr, verbError("sites add", res.StatusCode, string(body)))
+		// The one refusal a user can act on: a site we have never mapped needs the
+		// full URL, not a bare host. Say what to type instead of forwarding the
+		// server's phrasing, which reads like the CLI forgot a field.
+		if res.StatusCode == http.StatusBadRequest && bytes.Contains(respBody, []byte("url is required")) {
+			fmt.Fprintf(os.Stderr,
+				"sites add: %s is not in the catalog yet, so adding it starts a fresh map,\n"+
+					"and that needs the full URL rather than a bare domain:\n\n"+
+					"  rindler sites add https://%s/the/page/you/care/about\n", domain, domain)
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, verbError("sites add", res.StatusCode, string(respBody)))
 		return 1
 	}
 	if *jsonOut {
-		fmt.Println(strings.TrimSpace(string(body)))
+		fmt.Println(strings.TrimSpace(string(respBody)))
 		return 0
 	}
 	// 200 means the row already existed. Say which happened rather than
