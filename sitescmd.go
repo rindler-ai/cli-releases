@@ -17,6 +17,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -116,7 +117,84 @@ func getJSONRaw(
 	return body, nil
 }
 
+// runSitesAdd is `rindler sites add <domain>`: track a site for the WORKSPACE.
+//
+// `sites` lists what you can act on; until this existed the CLI could only
+// consume that list, never contribute to it, so adding a site meant leaving the
+// terminal for the dashboard. The row it creates is the workspace grant itself,
+// which is what start_session resolves -- so after this, `rindler sites` shows
+// the domain and `rindler actions <domain>` describes it.
+func runSitesAdd(args []string) int {
+	fs := flag.NewFlagSet("sites add", flag.ContinueOnError)
+	apiBaseFlag := fs.String("api-base", "", "Rindler API origin")
+	jsonOut := fs.Bool("json", false, "print the server's JSON response verbatim")
+	// parseAnyOrder, like `actions`: Go's flag package stops at the first
+	// positional, so `sites add example.com --json` would silently drop --json.
+	rest, err := parseAnyOrder(fs, args)
+	if err != nil {
+		return 2
+	}
+	if len(rest) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: rindler sites add <domain> [--json]")
+		return 2
+	}
+	// Accept a full URL as well as a bare host, the same as `actions` and `map`:
+	// people paste what is in the address bar.
+	domain, err := siteFromTarget(rest[0])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sites add:", err)
+		return 2
+	}
+	key, apiBase, code := resolveKeyAndBase(*apiBaseFlag, "sites add")
+	if code != 0 {
+		return code
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	payload, err := json.Marshal(map[string]string{"domain": domain, "source": "requested"})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sites add:", err)
+		return 1
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(apiBase, "/")+"/v1/runtime/tracked-sites", bytes.NewReader(payload))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sites add:", err)
+		return 1
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := defaultHTTPClient().Do(req)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sites add:", err)
+		return 1
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
+		fmt.Fprintln(os.Stderr, verbError("sites add", res.StatusCode, string(body)))
+		return 1
+	}
+	if *jsonOut {
+		fmt.Println(strings.TrimSpace(string(body)))
+		return 0
+	}
+	// 200 means the row already existed. Say which happened rather than
+	// reporting an add that added nothing.
+	if res.StatusCode == http.StatusOK {
+		fmt.Printf("%s is already tracked by your workspace.\n", domain)
+	} else {
+		fmt.Printf("✓ Added %s to your workspace.\n", domain)
+	}
+	fmt.Printf("See it:  rindler sites\nWhat it can do:  rindler actions %s\n", domain)
+	return 0
+}
+
 func runSites(args []string) int {
+	if len(args) > 0 && args[0] == "add" {
+		return runSitesAdd(args[1:])
+	}
 	fs := flag.NewFlagSet("sites", flag.ContinueOnError)
 	apiBaseFlag := fs.String("api-base", "", "Rindler API origin")
 	// "the server's JSON", not "list": this prints the response object
