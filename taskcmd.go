@@ -59,6 +59,11 @@ type taskResponse struct {
 	} `json:"schedule,omitempty"`
 	NeedsApproval  bool `json:"needs_approval,omitempty"`
 	RetryAfterSecs int  `json:"retry_after_seconds,omitempty"`
+	// Ran says whether the automation was actually EXECUTED. A draft returned
+	// because the sentence did not supply a required input never ran at all,
+	// and it arrives with the same not_armed schedule as a run that ran and
+	// failed. One is the customer's turn to answer, the other is ours to fix.
+	Ran bool `json:"ran,omitempty"`
 }
 
 // runTask is the `rindler run <site> "<task>"` path.
@@ -112,6 +117,22 @@ func runTask(site, task string, args []string) int {
 	return exitForAnswer(answer)
 }
 
+// taskHTTPClient is deliberately NOT defaultHTTPClient().
+//
+// That one hardcodes a 30-second ceiling, which is right for every other verb
+// here and fatally wrong for this one: a first pass opens a real browser and
+// drives a real site. Measured on the dev deploy, an allbirds build took 25
+// seconds and a slower one died at exactly 30 with "Client.Timeout exceeded
+// while awaiting headers" -- the server was still working, and the CLI had
+// already given up and told the customer nothing useful.
+//
+// Timeout 0 means the CONTEXT carries the whole budget, which is where the
+// caller's --timeout already lives. A second ceiling here could only ever be
+// the smaller of the two, silently.
+func taskHTTPClient() *http.Client {
+	return &http.Client{Timeout: 0}
+}
+
 func postTask(ctx context.Context, key string, body taskRequest) (taskResponse, []byte, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -126,7 +147,7 @@ func postTask(ctx context.Context, key string, body taskRequest) (taskResponse, 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
 
-	res, err := defaultHTTPClient().Do(req)
+	res, err := taskHTTPClient().Do(req)
 	if err != nil {
 		// A deadline here is the RUN being slow, not the server being broken,
 		// and saying so keeps someone from re-running a task that may well have
@@ -172,7 +193,12 @@ func printTaskAnswerTo(out, errOut io.Writer, a taskResponse) {
 		ranOK := a.Schedule == nil || a.Schedule.State != "not_armed"
 		mark := "✓"
 		if !ranOK {
+			// "?" when it is waiting on the customer, "!" when it tried and
+			// failed. Two different next steps, so two different marks.
 			mark = "!"
+			if !a.Ran {
+				mark = "?"
+			}
 		}
 		fmt.Fprintf(out, "%s %s\n", mark, firstNonEmpty(a.Summary, a.Name, "Done."))
 		if a.Schedule != nil && a.Schedule.State == "not_armed" && a.Schedule.Reason != "" {
@@ -221,6 +247,14 @@ func exitForAnswer(a taskResponse) int {
 	switch a.Outcome {
 	case "built":
 		if a.Schedule != nil && a.Schedule.State == "not_armed" {
+			// NEEDS AN ANSWER vs RAN AND FAILED. Measured on the dev deploy:
+			// ahs.com and portal.vtcourts.gov both came back in 4 seconds --
+			// far too fast for a browser -- because they were asking for a ZIP
+			// code, not reporting a failure. Reporting that as a failed run
+			// sends someone to debug a site that is working fine.
+			if !a.Ran {
+				return 4
+			}
 			return 5
 		}
 		return 0
