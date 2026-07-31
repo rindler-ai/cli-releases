@@ -60,9 +60,14 @@ Say what you want in your own words. Rindler works out how to do it on that
 site, does it once, and saves it so you can run it again. If the site cannot do
 what you asked, it says so plainly rather than guessing.
 
-Exit codes, for scripts: `0` it ran, `3` the site cannot do that, `4` it needs
-one thing answered first, `1` something on our side failed and a retry is
-reasonable.
+Exit codes, for scripts: `0` it ran, `5` it was saved but the run did not
+succeed, `3` the site cannot do that, `4` it needs one thing answered first,
+`1` something on our side failed and a retry is reasonable.
+
+`5` and `0` are deliberately different. A task can build perfectly and then
+fail on the site (a page that would not load, a login that lapsed). The
+automation is saved and worth retrying, but the thing you asked for did not
+happen, and a script must not read that as success.
 
 ### Login flows
 
