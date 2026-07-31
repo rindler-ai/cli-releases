@@ -89,5 +89,5 @@ func installedKeyMatches(installed, active string) bool {
 // the active one -- the tool calls will 401 even though the server is installed.
 func keyMismatchNote(agent string) string {
 	return "installed key is not your current one, so " + agent +
-		" will get 401s — re-run `rindler mcp install`"
+		" will get 401s — run `rindler login` again"
 }

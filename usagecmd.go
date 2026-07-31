@@ -34,7 +34,7 @@ const (
 
 	// The disclosures the dashboard shows. They are true of the DATA, not of the
 	// surface, so the CLI owes the reader the same two sentences.
-	creditsReconstructedNote = "Per-member credits are reconstructed from telemetry, not read from a per-member ledger."
+	creditsReconstructedNote = "Per-member automation counts are reconstructed from telemetry, not read from a per-member ledger."
 	alsoVisibleNote          = "Owners and admins can see these same numbers."
 )
 
@@ -230,7 +230,7 @@ func burnRate(creditsSpent int64, windowDays int) float64 {
 //
 //   - a zero or unknown burn yields 0 (no projection), because dividing by it
 //     would produce infinity and print a promise
-//   - it is capped, because "your credits last 9000 days" is noise, and a tiny
+//   - it is capped, because "your automations last 9000 days" is noise, and a tiny
 //     burn over a short window extrapolates absurdly far
 func daysLeft(remaining int64, burn float64) int {
 	if burn <= 0 || remaining <= 0 {
@@ -248,30 +248,30 @@ func printCredits(w io.Writer, r creditsRead) {
 	if r.unauthorized {
 		// Permanent for this credential, so say so and point somewhere useful
 		// instead of describing a failure the reader could wait out.
-		fmt.Fprintln(w, "  credits  balance isn't readable with a CLI key — see the dashboard")
+		fmt.Fprintln(w, "  automations  balance isn't readable from the command line — see the dashboard")
 		return
 	}
 	c := r.resp
 	if c == nil {
-		fmt.Fprintln(w, "  credits  (could not read your balance)")
+		fmt.Fprintln(w, "  automations  (could not read your balance)")
 		return
 	}
 	if c.Credit == nil {
 		// A personal-pool verdict carries no workspace balance. Say which pool
 		// rather than implying the number is missing.
-		fmt.Fprintf(w, "  credits  billed to the %s pool\n", firstNonEmptyStr(c.Pool, "personal"))
+		fmt.Fprintf(w, "  automations  billed to the %s pool\n", firstNonEmptyStr(c.Pool, "personal"))
 		return
 	}
 	if !c.Credit.Known {
 		// The server told us it could not read the balance. That is NOT zero.
-		fmt.Fprintln(w, "  credits  (balance temporarily unavailable)")
+		fmt.Fprintln(w, "  automations  (balance temporarily unavailable)")
 		return
 	}
 	if bar := creditBar(c.Credit.Remaining, c.Credit.Allotment); bar != "" {
-		fmt.Fprintf(w, "  credits  %s  %d of %d left\n", bar, c.Credit.Remaining, c.Credit.Allotment)
+		fmt.Fprintf(w, "  automations  %s  %d of %d left\n", bar, c.Credit.Remaining, c.Credit.Allotment)
 		return
 	}
-	fmt.Fprintf(w, "  credits  %d used\n", c.Credit.Used)
+	fmt.Fprintf(w, "  automations  %d used\n", c.Credit.Used)
 }
 
 func firstNonEmptyStr(a, b string) string {
@@ -423,7 +423,7 @@ func printUsage(w io.Writer, u usageResponse, scope string) {
 		// predate the classifier and we genuinely do not know how they ended.
 		fmt.Fprintf(w, "  unclassified %d (ran before outcomes were recorded)\n", row.Unclassified)
 	}
-	fmt.Fprintf(w, "  credits      %d spent\n", row.Credits)
+	fmt.Fprintf(w, "  automations  %d spent\n", row.Credits)
 	if scope == scopeMe && row.LastActiveAt != "" {
 		fmt.Fprintf(w, "  last active  %s\n", dayOf(row.LastActiveAt))
 	}

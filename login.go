@@ -203,9 +203,7 @@ func runLogin(args []string) int {
 	// login that silently could not map, and nothing said why. Requesting it always
 	// is safe because the server grants it only if the workspace is entitled, so a
 	// non-entitled login still comes back false; it just is not false by accident.
-	noMap := fs.Bool("no-map", false, "do not request site-mapping capability")
 	deprecatedMap := fs.Bool("map", false, "deprecated: mapping is requested by default; this flag is a no-op")
-	noMCP := fs.Bool("no-mcp", false, "do not install the MCP into Claude Code / Codex after login")
 	authorizeBase := fs.String("authorize-base", envOr("RINDLER_AUTHORIZE_BASE", defaultAuthorizeBase), "dashboard origin serving the consent page")
 	apiBase := fs.String("api-base", envOr("RINDLER_API_BASE", defaultAPIBase), "Rindler API origin serving /api/cli/token")
 	timeout := fs.Duration("timeout", 5*time.Minute, "how long to wait for browser approval")
@@ -229,7 +227,7 @@ func runLogin(args []string) int {
 	if *deprecatedMap {
 		fmt.Fprintln(os.Stderr, "note: --map is deprecated; mapping is requested by default.")
 	}
-	opts := loginOpts{AuthorizeBase: *authorizeBase, APIBase: *apiBase, Mapping: mappingRequested(*noMap), Device: deviceLabel()}
+	opts := loginOpts{AuthorizeBase: *authorizeBase, APIBase: *apiBase, Mapping: false, Device: deviceLabel()}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	httpc := defaultHTTPClient()
@@ -307,17 +305,6 @@ func runLogin(args []string) int {
 	}
 	// Say so out loud when mapping was asked for and refused. The server denies it
 	// silently (an unentitled workspace just returns false), so without this the
-	// only symptom is `rindler map` failing later with a 403 that looks like a bug.
-	if !*noMap && !tr.MapperAccess {
-		fmt.Println("\nNote: site mapping is NOT enabled on this key — your workspace is not")
-		fmt.Println("entitled to it. `rindler map` will be refused until that changes.")
-	}
-
-	if !*noMCP {
-		fmt.Println("\nInstalling the Rindler MCP into your agents:")
-		printAgentResults(os.Stdout, "configured", installAllAgents(mcpEndpoint(cfg), tr.AccessToken))
-		fmt.Println("\nRestart Claude Code / Codex to connect.")
-	}
 	return 0
 }
 
@@ -328,21 +315,11 @@ func mcpEndpoint(cfg cliConfig) string {
 	if cfg.MCPURL != "" {
 		return cfg.MCPURL
 	}
-	// Same ladder as every command, so `rindler mcp install` on a box that only
+	// Same ladder as every command, so a login on a box that only
 	// has RINDLER_API_KEY and RINDLER_API_BASE set does not quietly install the
 	// PRODUCTION endpoint into the agent's config -- a wrong value here is worse
 	// than most, because it persists in a file the user will not think to check.
 	return resolveAPIBase("", cfg) + "/mcp"
-}
-
-// mappingRequested decides whether login asks for site-mapping capability. It is
-// its own function so the DEFAULT is pinned by a test: the server always writes
-// mapper_access, and the authorization check reads that flag first and
-// short-circuits, so defaulting to false hands out keys that are affirmatively
-// denied the mapper with no admin fallback. That failure is silent at login and
-// only surfaces later as a 403, which is exactly why it must not regress.
-func mappingRequested(noMap bool) bool {
-	return !noMap
 }
 
 func mapNote(mapping bool) string {

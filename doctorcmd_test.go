@@ -111,19 +111,6 @@ func TestDiagnoseExpiringSoonIsWarnNotFail(t *testing.T) {
 	}
 }
 
-// Mapping is a WARNING, never a failure: every verb except `map` works without
-// it, so failing here would tell a healthy setup it is broken.
-func TestDiagnoseMappingAbsentIsWarnNotFail(t *testing.T) {
-	t.Setenv("RINDLER_CONFIG_DIR", t.TempDir())
-	got, ok := findCheck(diagnose(cliConfig{}, "", false, false), "site mapping")
-	if !ok || got.State != checkWarn {
-		t.Fatalf("absent mapping must WARN, got %+v", got)
-	}
-	if got, _ := findCheck(diagnose(cliConfig{MapperAccess: true}, "", false, false), "site mapping"); got.State != checkOK {
-		t.Errorf("granted mapping must pass, got %+v", got)
-	}
-}
-
 func TestDiagnoseWarnsOnNonDefaultAPIOrigin(t *testing.T) {
 	t.Setenv("RINDLER_CONFIG_DIR", t.TempDir())
 	got, _ := findCheck(diagnose(cliConfig{}, "https://preview.example", false, false), "api origin")

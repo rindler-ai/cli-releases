@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -192,45 +191,6 @@ func TestDoctorFailsLoggedOutAndIsOfflineCapable(t *testing.T) {
 	}
 }
 
-// The MCP install lifecycle, against temp agent configs.
-func TestMCPInstallStatusRemoveLifecycle(t *testing.T) {
-	dir := isolate(t)
-	t.Setenv("RINDLER_API_KEY", "rindler_live_test")
-
-	if code := run([]string{"mcp", "install"}); code != 0 {
-		t.Fatalf("mcp install should exit 0, got %d", code)
-	}
-	claudeCfg := filepath.Join(dir, "claude", ".claude.json")
-	b, err := os.ReadFile(claudeCfg)
-	if err != nil {
-		t.Fatalf("claude config not written: %v", err)
-	}
-	if !strings.Contains(string(b), "rindler") {
-		t.Errorf("claude config should carry the rindler server, got %s", b)
-	}
-	// The key must be written as the Bearer, since that is what makes the MCP work.
-	if !strings.Contains(string(b), "rindler_live_test") {
-		t.Errorf("claude config should carry the key as a bearer")
-	}
-
-	if code := run([]string{"mcp", "status"}); code != 0 {
-		t.Errorf("mcp status should exit 0, got %d", code)
-	}
-	if code := run([]string{"mcp", "remove"}); code != 0 {
-		t.Errorf("mcp remove should exit 0, got %d", code)
-	}
-	b2, err := os.ReadFile(claudeCfg)
-	if err != nil {
-		t.Fatalf("claude config vanished on remove: %v", err)
-	}
-	if strings.Contains(string(b2), "rindler_live_test") {
-		t.Errorf("remove must drop the key, got %s", b2)
-	}
-}
-
-// `rindler install` is deliberately NOT a command: on a CLI, a bare "install"
-// reads as installing the tool itself, not an MCP server into an agent.
-// `rindler mcp install` is the only spelling.
 func TestBareInstallIsNotACommand(t *testing.T) {
 	isolate(t)
 	if code := run([]string{"install", "mcp"}); code != 2 {

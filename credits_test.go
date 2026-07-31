@@ -121,7 +121,10 @@ func TestAnUnauthorizedBalanceReadIsNotReportedAsTransient(t *testing.T) {
 	if strings.Contains(out, "could not read") || strings.Contains(out, "temporarily") {
 		t.Errorf("a permanent refusal must not be worded as a transient failure:\n%s", out)
 	}
-	if !strings.Contains(out, "CLI key") {
+	// Still asserts the reader learns WHY, just not in our vocabulary: "CLI key"
+	// names an internal object, and the whole point of the pivot is that a
+	// non-technical operator never has to know what a key is.
+	if !strings.Contains(out, "command line") {
 		t.Errorf("the reader should learn WHY the balance is absent:\n%s", out)
 	}
 }

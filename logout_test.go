@@ -59,9 +59,9 @@ func TestLogoutClearsLocalStateWhenServerIsUnreachable(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("saveConfig: %v", err)
 	}
-	if code := run([]string{"mcp", "install"}); code != 0 {
-		t.Fatalf("setup install failed: %d", code)
-	}
+	// No agent config is planted: the CLI no longer installs one. What this
+	// test still proves is the part that matters -- an unreachable revoke leg
+	// must not stop logout clearing the local key and config.
 
 	if code := run([]string{"logout"}); code != 0 {
 		t.Fatalf("logout should exit 0 even when the revoke call fails, got %d", code)
