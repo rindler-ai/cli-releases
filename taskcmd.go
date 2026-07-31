@@ -106,10 +106,10 @@ func runTask(site, task string, args []string) int {
 	}
 	if *jsonOut {
 		fmt.Println(strings.TrimSpace(string(raw)))
-		return exitForOutcome(answer.Outcome)
+		return exitForAnswer(answer)
 	}
 	printTaskAnswer(answer)
-	return exitForOutcome(answer.Outcome)
+	return exitForAnswer(answer)
 }
 
 func postTask(ctx context.Context, key string, body taskRequest) (taskResponse, []byte, error) {
@@ -165,7 +165,16 @@ func printTaskAnswer(a taskResponse) { printTaskAnswerTo(os.Stdout, os.Stderr, a
 func printTaskAnswerTo(out, errOut io.Writer, a taskResponse) {
 	switch a.Outcome {
 	case "built":
-		fmt.Fprintf(out, "✓ %s\n", firstNonEmpty(a.Summary, a.Name, "Done."))
+		// The tick is claimed only by a run that WORKED. A saved automation
+		// whose run failed gets a different mark, because a customer scanning
+		// output should not have to read the second line to learn the first
+		// one is not what they wanted.
+		ranOK := a.Schedule == nil || a.Schedule.State != "not_armed"
+		mark := "✓"
+		if !ranOK {
+			mark = "!"
+		}
+		fmt.Fprintf(out, "%s %s\n", mark, firstNonEmpty(a.Summary, a.Name, "Done."))
 		if a.Schedule != nil && a.Schedule.State == "not_armed" && a.Schedule.Reason != "" {
 			fmt.Fprintf(out, "  %s\n", a.Schedule.Reason)
 		}
@@ -193,12 +202,27 @@ func printTaskAnswerTo(out, errOut io.Writer, a taskResponse) {
 	}
 }
 
-// exitForOutcome keys the exit code on the OUTCOME, so "the site cannot do
-// this" (3) and "we failed, retry" (1) are distinguishable by a script that
-// reads neither stdout nor the HTTP status.
-func exitForOutcome(outcome string) int {
-	switch outcome {
+// exitForAnswer keys the exit code on what actually HAPPENED, so a script can
+// branch without reading stdout or the HTTP status.
+//
+// THE `built` CASE IS NOT AUTOMATICALLY A SUCCESS, and getting that wrong is
+// the same mistake this CLI already refuses to make elsewhere. `built` means
+// the automation now exists; whether it RAN is a separate fact, carried on
+// `schedule`. finishBuild reports a run that did not succeed as
+// `not_armed` with a sentence saying why. Measured live on 2026-07-31: a task
+// on allbirds.com built fine and its one step failed with page_loading, and an
+// outcome-only mapping exited 0 -- telling a script the thing happened when it
+// had not. That is the status-vs-retrieval collapse wearing different clothes.
+//
+// 5 rather than 1 because the two need different responses: 1 means we never
+// got an answer and a retry is reasonable; 5 means the automation is SAVED and
+// the run is worth retrying or looking at, which is not the same advice.
+func exitForAnswer(a taskResponse) int {
+	switch a.Outcome {
 	case "built":
+		if a.Schedule != nil && a.Schedule.State == "not_armed" {
+			return 5
+		}
 		return 0
 	case "cannot":
 		return 3

@@ -30,7 +30,7 @@ func TestExitCodeDistinguishesTheOutcomes(t *testing.T) {
 		{"blocked", 1, "not attempted"},
 		{"something-a-newer-server-invents", 1, "unknown is never a success"},
 	} {
-		if got := exitForOutcome(tc.outcome); got != tc.want {
+		if got := exitForAnswer(taskResponse{Outcome: tc.outcome}); got != tc.want {
 			t.Errorf("%s: exit %d, want %d (%s)", tc.outcome, got, tc.want, tc.why)
 		}
 	}
@@ -75,7 +75,7 @@ func TestTheOutcomeFieldDecidesNotTheHttpStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("postTask: %v", err)
 	}
-	if got := exitForOutcome(answer.Outcome); got != 3 {
+	if got := exitForAnswer(answer); got != 3 {
 		t.Errorf("a 200 carrying `cannot` must still exit 3, got %d", got)
 	}
 }
@@ -155,5 +155,52 @@ func TestRunDispatchPicksTheRightShape(t *testing.T) {
 				t.Errorf("runShapeFor(%q) = %s, want %s", tc.args, got, tc.want)
 			}
 		})
+	}
+}
+
+// A BUILT AUTOMATION WHOSE RUN FAILED IS NOT A SUCCESS. Found live on
+// 2026-07-31: a task on allbirds.com built fine, its one step failed with
+// page_loading, and the outcome-only mapping exited 0 -- telling a script the
+// thing happened when it had not.
+func TestABuiltAutomationWhoseRunFailedDoesNotExitZero(t *testing.T) {
+	failed := taskResponse{Outcome: "built", Name: "n"}
+	failed.Schedule = &struct {
+		State  string `json:"state"`
+		Reason string `json:"reason,omitempty"`
+	}{State: "not_armed", Reason: "step 1 (search_products) failed (page_loading)"}
+
+	if got := exitForAnswer(failed); got == 0 {
+		t.Fatal("a saved automation whose run failed must not exit 0")
+	}
+	if got := exitForAnswer(failed); got != 5 {
+		t.Errorf("exit %d, want 5 (saved, but the run did not succeed)", got)
+	}
+
+	// ...and the customer must see it in the FIRST line, not the second.
+	var b strings.Builder
+	printTaskAnswerTo(&b, &b, failed)
+	if strings.HasPrefix(b.String(), "\u2713") {
+		t.Errorf("a failed run claimed the success mark:\n%s", b.String())
+	}
+	if !strings.Contains(b.String(), "page_loading") {
+		t.Errorf("the reason the run failed was dropped:\n%s", b.String())
+	}
+}
+
+// The ordinary success still exits 0 and still claims the tick.
+func TestARunThatWorkedExitsZero(t *testing.T) {
+	ok := taskResponse{Outcome: "built", Name: "n", Summary: "s"}
+	ok.Schedule = &struct {
+		State  string `json:"state"`
+		Reason string `json:"reason,omitempty"`
+	}{State: "unscheduled"}
+
+	if got := exitForAnswer(ok); got != 0 {
+		t.Errorf("a run that worked exited %d, want 0", got)
+	}
+	var b strings.Builder
+	printTaskAnswerTo(&b, &b, ok)
+	if !strings.HasPrefix(b.String(), "\u2713") {
+		t.Errorf("a successful run did not claim the tick:\n%s", b.String())
 	}
 }
