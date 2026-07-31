@@ -2,13 +2,15 @@
 
 [![License: LGPL v3](https://img.shields.io/badge/License-LGPL_v3-blue.svg)](./LICENSE)
 
-Sign in to [Rindler](https://rindler.ai) and install the Rindler MCP into your
-coding agents.
+Run a task on a website by saying what you want done.
 
-`rindler login` authenticates through your Clerk account (OAuth 2.0 Authorization
-Code + PKCE), receives a **temporary MCP key bound to that Clerk session**, stores
-it in your OS keyring, and wires the Rindler MCP into **Claude Code** and
-**Codex**.
+```sh
+rindler run chase.com "download last month's statements"
+```
+
+`rindler login` signs you in through your Rindler account (OAuth 2.0
+Authorization Code + PKCE) and stores a **temporary key bound to that session**
+in your OS keyring. Nothing else to configure.
 
 ## Install
 
@@ -29,24 +31,38 @@ against `SHA256SUMS.txt`, `chmod +x`, and put it on your `PATH`.
 
 | Command | What it does |
 |---|---|
-| `rindler login [--paste] [--no-map] [--no-mcp]` | Sign in, mint a session-bound key, install the MCP into Claude Code + Codex |
-| `rindler sites` | List the sites you can act on |
-| `rindler sites add <domain>` | Track a site for your workspace, so everyone on it can act on the site |
-| `rindler actions <site>` | Show a site's actions and the inputs each takes |
-| `rindler run --site <d> --action <a> [--input k=v]` | Run actions against a site and follow the job |
-| `rindler run status <job-id> [--once]` | Follow a run you already started |
-| `rindler map <url> [--mode fast\|deep]` | Map a site and follow the run to a verdict |
-| `rindler map status <job-id> [--once]` | Follow a run you already started |
-| `rindler logout` | Best-effort server-side revoke, then clear local + agent config |
-| `rindler status` | Login + MCP-install status |
+| `rindler run <site> "<what you want done>"` | Say it in your own words; Rindler builds it and runs it |
+| `rindler login [--paste]` | Sign in |
+| `rindler logout` | Sign out on this machine |
+| `rindler sites` | The sites you can use |
+| `rindler sites add <domain>` | Add a site to your workspace, so everyone on it can use the site |
+| `rindler creds add\|list\|show\|rm` | Logins for a site, encrypted on this device (see Credential vault) |
+| `rindler usage [--workspace] [--days N] [--json]` | Your automations, the same numbers the dashboard shows |
+| `rindler sessions [--json]` | Browsers open on this machine |
+| `rindler kill <name>` | Close one |
+| `rindler vault status\|enable\|disable` | Turn credential custody on this machine on or off |
+| `rindler device status\|list\|serve` | This machine as a paired device, and the relay |
+| `rindler status` | Whether you are signed in |
 | `rindler whoami` | The signed-in account, plus a `workspace:` line when the key acts in a workspace you do not own |
-| `rindler mcp install\|status\|remove` | Manage the MCP install only |
-| `rindler creds add\|list\|show\|rm` | Site credentials, encrypted on this device (see Credential vault) |
-| `rindler usage [--workspace] [--days N] [--json]` | Your usage, the same numbers the dashboard shows |
-| `rindler sessions [--json]` | Named browser sessions on this machine |
-| `rindler kill <name>` | End a named session |
 | `rindler doctor` | Diagnose a broken setup and print the fix |
 | `rindler version` | Print the version |
+
+### Running a task
+
+```
+$ rindler run chase.com "download last month's statements"
+Working on chase.com…
+✓ Downloads last month's statements from Chase
+  Saved as "Download statements" — run it again any time.
+```
+
+Say what you want in your own words. Rindler works out how to do it on that
+site, does it once, and saves it so you can run it again. If the site cannot do
+what you asked, it says so plainly rather than guessing.
+
+Exit codes, for scripts: `0` it ran, `3` the site cannot do that, `4` it needs
+one thing answered first, `1` something on our side failed and a retry is
+reasonable.
 
 ### Login flows
 
@@ -55,10 +71,6 @@ against `SHA256SUMS.txt`, `chmod +x`, and put it on your `PATH`.
 - **`--paste`** (automatic on headless/SSH): prints a URL to open in any browser
   on any device; you paste back the `code#state` it shows. The `state` is
   verified (CSRF).
-
-Site-mapping capability is requested by DEFAULT; `--no-map` opts out of it.
-Either way the grant depends on your workspace being entitled to mapping, and
-`rindler status` reports which one you got.
 
 ### Two credential lanes
 
@@ -143,23 +155,22 @@ See [`LICENSE`](./LICENSE); the GPL-3.0 text it incorporates by reference is in
 
 ## Doing something with a site
 
-Start from discovery — the names `run` needs are not guessable:
+Start with what you can use, then say what you want:
 
 ```sh
-rindler sites                      # what you can act on
-rindler actions example.com        # what that site exposes, and each action's inputs
-rindler run --site example.com --action search_products --input query=shoes
+rindler sites                                          # the sites you can use
+rindler run example.com "find the cheapest shoes"      # say it in your own words
 ```
 
-`run` reports two different things, and keeps them apart on purpose:
+Rindler keeps two different things apart, on purpose:
 
-- **status** — did the attempt run (`complete`, `failed`, …)
-- **retrieval** — what the source actually held, and why it fell short
+- **did it run** — the attempt finished, or it did not
+- **what it got back** — what the site actually held, and why it fell short
 
-A job can finish `complete` and still have retrieved nothing usable (a bot wall,
-an expired login, a selector that rotted). `run` exits **non-zero** in that case,
+A run can finish cleanly and still have retrieved nothing usable (a bot wall, an
+expired login, a page that changed). `run` exits **non-zero** in that case,
 because to a script that is not a success.
 
-Stuck? `rindler doctor` checks the credential, its expiry, mapping entitlement,
-the API origin, the MCP install, and whether the server still accepts your key —
-then prints the fix rather than the symptom.
+Stuck? `rindler doctor` checks the credential, its expiry, the API origin, and
+whether the server still accepts your key — then prints the fix rather than the
+symptom.
