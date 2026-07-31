@@ -59,6 +59,11 @@ type taskResponse struct {
 	} `json:"schedule,omitempty"`
 	NeedsApproval  bool `json:"needs_approval,omitempty"`
 	RetryAfterSecs int  `json:"retry_after_seconds,omitempty"`
+	// Ran says whether the automation was actually EXECUTED. A draft returned
+	// because the sentence did not supply a required input never ran at all,
+	// and it arrives with the same not_armed schedule as a run that ran and
+	// failed. One is the customer's turn to answer, the other is ours to fix.
+	Ran bool `json:"ran,omitempty"`
 }
 
 // runTask is the `rindler run <site> "<task>"` path.
@@ -106,10 +111,26 @@ func runTask(site, task string, args []string) int {
 	}
 	if *jsonOut {
 		fmt.Println(strings.TrimSpace(string(raw)))
-		return exitForOutcome(answer.Outcome)
+		return exitForAnswer(answer)
 	}
 	printTaskAnswer(answer)
-	return exitForOutcome(answer.Outcome)
+	return exitForAnswer(answer)
+}
+
+// taskHTTPClient is deliberately NOT defaultHTTPClient().
+//
+// That one hardcodes a 30-second ceiling, which is right for every other verb
+// here and fatally wrong for this one: a first pass opens a real browser and
+// drives a real site. Measured on the dev deploy, an allbirds build took 25
+// seconds and a slower one died at exactly 30 with "Client.Timeout exceeded
+// while awaiting headers" -- the server was still working, and the CLI had
+// already given up and told the customer nothing useful.
+//
+// Timeout 0 means the CONTEXT carries the whole budget, which is where the
+// caller's --timeout already lives. A second ceiling here could only ever be
+// the smaller of the two, silently.
+func taskHTTPClient() *http.Client {
+	return &http.Client{Timeout: 0}
 }
 
 func postTask(ctx context.Context, key string, body taskRequest) (taskResponse, []byte, error) {
@@ -126,7 +147,7 @@ func postTask(ctx context.Context, key string, body taskRequest) (taskResponse, 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
 
-	res, err := defaultHTTPClient().Do(req)
+	res, err := taskHTTPClient().Do(req)
 	if err != nil {
 		// A deadline here is the RUN being slow, not the server being broken,
 		// and saying so keeps someone from re-running a task that may well have
@@ -165,7 +186,21 @@ func printTaskAnswer(a taskResponse) { printTaskAnswerTo(os.Stdout, os.Stderr, a
 func printTaskAnswerTo(out, errOut io.Writer, a taskResponse) {
 	switch a.Outcome {
 	case "built":
-		fmt.Fprintf(out, "✓ %s\n", firstNonEmpty(a.Summary, a.Name, "Done."))
+		// The tick is claimed only by a run that WORKED. A saved automation
+		// whose run failed gets a different mark, because a customer scanning
+		// output should not have to read the second line to learn the first
+		// one is not what they wanted.
+		ranOK := a.Schedule == nil || a.Schedule.State != "not_armed"
+		mark := "✓"
+		if !ranOK {
+			// "?" when it is waiting on the customer, "!" when it tried and
+			// failed. Two different next steps, so two different marks.
+			mark = "!"
+			if !a.Ran {
+				mark = "?"
+			}
+		}
+		fmt.Fprintf(out, "%s %s\n", mark, firstNonEmpty(a.Summary, a.Name, "Done."))
 		if a.Schedule != nil && a.Schedule.State == "not_armed" && a.Schedule.Reason != "" {
 			fmt.Fprintf(out, "  %s\n", a.Schedule.Reason)
 		}
@@ -193,12 +228,35 @@ func printTaskAnswerTo(out, errOut io.Writer, a taskResponse) {
 	}
 }
 
-// exitForOutcome keys the exit code on the OUTCOME, so "the site cannot do
-// this" (3) and "we failed, retry" (1) are distinguishable by a script that
-// reads neither stdout nor the HTTP status.
-func exitForOutcome(outcome string) int {
-	switch outcome {
+// exitForAnswer keys the exit code on what actually HAPPENED, so a script can
+// branch without reading stdout or the HTTP status.
+//
+// THE `built` CASE IS NOT AUTOMATICALLY A SUCCESS, and getting that wrong is
+// the same mistake this CLI already refuses to make elsewhere. `built` means
+// the automation now exists; whether it RAN is a separate fact, carried on
+// `schedule`. finishBuild reports a run that did not succeed as
+// `not_armed` with a sentence saying why. Measured live on 2026-07-31: a task
+// on allbirds.com built fine and its one step failed with page_loading, and an
+// outcome-only mapping exited 0 -- telling a script the thing happened when it
+// had not. That is the status-vs-retrieval collapse wearing different clothes.
+//
+// 5 rather than 1 because the two need different responses: 1 means we never
+// got an answer and a retry is reasonable; 5 means the automation is SAVED and
+// the run is worth retrying or looking at, which is not the same advice.
+func exitForAnswer(a taskResponse) int {
+	switch a.Outcome {
 	case "built":
+		if a.Schedule != nil && a.Schedule.State == "not_armed" {
+			// NEEDS AN ANSWER vs RAN AND FAILED. Measured on the dev deploy:
+			// ahs.com and portal.vtcourts.gov both came back in 4 seconds --
+			// far too fast for a browser -- because they were asking for a ZIP
+			// code, not reporting a failure. Reporting that as a failed run
+			// sends someone to debug a site that is working fine.
+			if !a.Ran {
+				return 4
+			}
+			return 5
+		}
 		return 0
 	case "cannot":
 		return 3

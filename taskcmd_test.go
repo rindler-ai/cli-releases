@@ -10,11 +10,13 @@ package main
 //      cannot do something it can.
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExitCodeDistinguishesTheOutcomes(t *testing.T) {
@@ -30,7 +32,7 @@ func TestExitCodeDistinguishesTheOutcomes(t *testing.T) {
 		{"blocked", 1, "not attempted"},
 		{"something-a-newer-server-invents", 1, "unknown is never a success"},
 	} {
-		if got := exitForOutcome(tc.outcome); got != tc.want {
+		if got := exitForAnswer(taskResponse{Outcome: tc.outcome}); got != tc.want {
 			t.Errorf("%s: exit %d, want %d (%s)", tc.outcome, got, tc.want, tc.why)
 		}
 	}
@@ -75,7 +77,7 @@ func TestTheOutcomeFieldDecidesNotTheHttpStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("postTask: %v", err)
 	}
-	if got := exitForOutcome(answer.Outcome); got != 3 {
+	if got := exitForAnswer(answer); got != 3 {
 		t.Errorf("a 200 carrying `cannot` must still exit 3, got %d", got)
 	}
 }
@@ -155,5 +157,136 @@ func TestRunDispatchPicksTheRightShape(t *testing.T) {
 				t.Errorf("runShapeFor(%q) = %s, want %s", tc.args, got, tc.want)
 			}
 		})
+	}
+}
+
+// A BUILT AUTOMATION WHOSE RUN FAILED IS NOT A SUCCESS. Found live on
+// 2026-07-31: a task on allbirds.com built fine, its one step failed with
+// page_loading, and the outcome-only mapping exited 0 -- telling a script the
+// thing happened when it had not.
+func TestABuiltAutomationWhoseRunFailedDoesNotExitZero(t *testing.T) {
+	// Ran:true is the point -- this is a walk that FIRED and failed, not a
+	// draft waiting on an input. The two share the not_armed schedule.
+	failed := taskResponse{Outcome: "built", Name: "n", Ran: true}
+	failed.Schedule = &struct {
+		State  string `json:"state"`
+		Reason string `json:"reason,omitempty"`
+	}{State: "not_armed", Reason: "step 1 (search_products) failed (page_loading)"}
+
+	if got := exitForAnswer(failed); got == 0 {
+		t.Fatal("a saved automation whose run failed must not exit 0")
+	}
+	if got := exitForAnswer(failed); got != 5 {
+		t.Errorf("exit %d, want 5 (saved, but the run did not succeed)", got)
+	}
+
+	// ...and the customer must see it in the FIRST line, not the second.
+	var b strings.Builder
+	printTaskAnswerTo(&b, &b, failed)
+	if strings.HasPrefix(b.String(), "\u2713") {
+		t.Errorf("a failed run claimed the success mark:\n%s", b.String())
+	}
+	if !strings.Contains(b.String(), "page_loading") {
+		t.Errorf("the reason the run failed was dropped:\n%s", b.String())
+	}
+}
+
+// The ordinary success still exits 0 and still claims the tick.
+func TestARunThatWorkedExitsZero(t *testing.T) {
+	ok := taskResponse{Outcome: "built", Name: "n", Summary: "s"}
+	ok.Schedule = &struct {
+		State  string `json:"state"`
+		Reason string `json:"reason,omitempty"`
+	}{State: "unscheduled"}
+
+	if got := exitForAnswer(ok); got != 0 {
+		t.Errorf("a run that worked exited %d, want 0", got)
+	}
+	var b strings.Builder
+	printTaskAnswerTo(&b, &b, ok)
+	if !strings.HasPrefix(b.String(), "\u2713") {
+		t.Errorf("a successful run did not claim the tick:\n%s", b.String())
+	}
+}
+
+// NEEDS AN ANSWER IS NOT A FAILED RUN. Both arrive as built + not_armed;
+// only `ran` tells them apart. Measured on the dev deploy: ahs.com and
+// portal.vtcourts.gov returned in 4 seconds, far too fast for a browser,
+// because they were asking for an input.
+func TestAnAutomationWaitingOnAnInputIsNotReportedAsAFailedRun(t *testing.T) {
+	waiting := taskResponse{Outcome: "built", Name: "n", Ran: false}
+	waiting.Schedule = &struct {
+		State  string `json:"state"`
+		Reason string `json:"reason,omitempty"`
+	}{State: "not_armed", Reason: "Enter a ZIP code, then start quote."}
+
+	if got := exitForAnswer(waiting); got != 4 {
+		t.Errorf("exit %d, want 4 (needs one thing answered first)", got)
+	}
+
+	ranAndFailed := waiting
+	ranAndFailed.Ran = true
+	ranAndFailed.Schedule = waiting.Schedule
+	if got := exitForAnswer(ranAndFailed); got != 5 {
+		t.Errorf("a run that fired and failed exited %d, want 5", got)
+	}
+
+	// And the marks differ, so the first line already says which it is.
+	var a, b strings.Builder
+	printTaskAnswerTo(&a, &a, waiting)
+	printTaskAnswerTo(&b, &b, ranAndFailed)
+	if !strings.HasPrefix(a.String(), "?") {
+		t.Errorf("waiting-on-input did not get the question mark:\n%s", a.String())
+	}
+	if !strings.HasPrefix(b.String(), "!") {
+		t.Errorf("ran-and-failed did not get the warning mark:\n%s", b.String())
+	}
+}
+
+// THE CLIENT MUST NOT UNDERCUT THE CONTEXT.
+//
+// defaultHTTPClient() caps every request at 30 seconds, which is right for the
+// other verbs and fatal here: a first pass drives a real browser. Measured on
+// the dev deploy, a build took 25s and a slower one died at exactly 30s while
+// the server was still working.
+//
+// A FIRST VERSION OF THIS TEST WAS VACUOUS and is worth remembering. It drove
+// postTask with a 150ms context against a hanging server and asserted the
+// context ended the call -- which is true whether the client caps at 30s or
+// not, because 150ms comes first either way. Reverting the fix left it green.
+// The property is about the CLIENT, so the client is what it inspects.
+func TestTheTaskClientImposesNoCeilingOfItsOwn(t *testing.T) {
+	if got := taskHTTPClient().Timeout; got != 0 {
+		t.Errorf("task client Timeout = %v, want 0 so the context owns the budget", got)
+	}
+	// Stated as a CONTRAST, so this fails loudly if someone "helpfully" makes
+	// the shared client unlimited instead -- which would silently remove the
+	// 30s ceiling every other verb relies on.
+	if got := defaultHTTPClient().Timeout; got != 30*time.Second {
+		t.Errorf("defaultHTTPClient Timeout = %v, want 30s; the contrast is the point", got)
+	}
+}
+
+// The context still ends a call that outlives it, and says so as a slow RUN
+// rather than a broken server.
+func TestASlowRunIsReportedAsSlowNotBroken(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		_, _ = w.Write([]byte(`{"outcome":"built","name":"n"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("RINDLER_AUTHORIZE_BASE", srv.URL)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
+	defer cancel()
+	_, _, err := postTask(ctx, "k", taskRequest{Site: "a.com", Task: "t"})
+	close(release)
+
+	if err == nil {
+		t.Fatal("expected the context to end the call")
+	}
+	if !strings.Contains(err.Error(), "still going") {
+		t.Errorf("a deadline should be reported as a slow RUN, got: %v", err)
 	}
 }
