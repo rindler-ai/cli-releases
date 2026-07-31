@@ -65,7 +65,7 @@ var errCodexForeignRindler = errors.New(
 	"~/.codex/config.toml already defines a `rindler` MCP server in a form this\n" +
 		"installer does not rewrite (a quoted header, an inline table, or dotted keys).\n" +
 		"Adding ours would create a duplicate key and stop Codex from starting.\n" +
-		"Remove the existing rindler entry, then re-run `rindler mcp install`.")
+		"Remove the existing rindler entry by hand.")
 
 // codexForeignRindlerDefined reports whether a rindler server is defined in a
 // spelling other than our canonical [mcp_servers.rindler] header. TOML accepts

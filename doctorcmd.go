@@ -147,16 +147,6 @@ func diagnose(cfg cliConfig, apiBaseFlag string, envKey, offline bool) []check {
 	}
 
 	// 3. Mapping entitlement — a warning, not a failure: everything except
-	// `rindler map` works fine without it.
-	if !envKey {
-		if cfg.MapperAccess {
-			out = append(out, check{Name: "site mapping", State: checkOK, Detail: "enabled"})
-		} else {
-			out = append(out, check{Name: "site mapping", State: checkWarn,
-				Detail: "not enabled on this key",
-				Fix:    "rindler login (mapping is requested by default; if it stays off, your workspace is not entitled)"})
-		}
-	}
 
 	// 4. API origin. Shared resolver: this was a FOURTH hand-rolled copy of the
 	// ladder that skipped RINDLER_API_BASE -- while its own Fix line told the
@@ -172,19 +162,6 @@ func diagnose(cfg cliConfig, apiBaseFlag string, envKey, offline bool) []check {
 	out = append(out, check{Name: "api origin", State: st, Detail: detail,
 		Fix: "unset RINDLER_API_BASE, or log in again, to return to " + defaultAPIBase})
 
-	// 5. MCP install.
-	for _, r := range statusAllAgents() {
-		switch {
-		case r.err != nil:
-			out = append(out, check{Name: "mcp: " + r.agent, State: checkWarn,
-				Detail: r.err.Error(), Fix: "rindler mcp install"})
-		case r.ok:
-			out = append(out, check{Name: "mcp: " + r.agent, State: checkOK, Detail: r.path})
-		default:
-			out = append(out, check{Name: "mcp: " + r.agent, State: checkWarn,
-				Detail: "not configured", Fix: "rindler mcp install"})
-		}
-	}
 	return out
 }
 

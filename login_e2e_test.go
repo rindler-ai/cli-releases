@@ -6,8 +6,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -89,101 +87,6 @@ func stubBrowser(t *testing.T) {
 	t.Cleanup(func() { browserOpener = orig })
 }
 
-func TestLoginEndToEndStoresKeyAndInstallsMCP(t *testing.T) {
-	dir := isolate(t)
-	os.Unsetenv("RINDLER_API_KEY")
-	forceLoopback(t)
-	stubBrowser(t)
-
-	var gotQuery url.Values
-	srv := fakeAuthServer(t, true, func(q url.Values) { gotQuery = q })
-
-	code := run([]string{"login", "--api-base", srv.URL, "--authorize-base", srv.URL})
-	if code != 0 {
-		t.Fatalf("login should exit 0, got %d", code)
-	}
-
-	// Mapping is requested BY DEFAULT — the regression this guards is a plain
-	// login minting a key that is affirmatively denied the mapper.
-	if got := gotQuery.Get("mapping_requested"); got != "true" && got != "1" {
-		t.Errorf("login should request mapping by default, authorize query was %v", gotQuery)
-	}
-	// PKCE must be sent as a challenge, never the raw verifier.
-	if gotQuery.Get("code_challenge") == "" {
-		t.Error("authorize URL must carry a PKCE code_challenge")
-	}
-	if gotQuery.Get("code_challenge_method") != "S256" {
-		t.Errorf("PKCE method should be S256, got %q", gotQuery.Get("code_challenge_method"))
-	}
-	// RFC 8252: the redirect must be literal loopback, never localhost.
-	redirect := gotQuery.Get("redirect_uri")
-	if !strings.HasPrefix(redirect, "http://127.0.0.1:") {
-		t.Errorf("redirect_uri must be literal loopback, got %q", redirect)
-	}
-
-	store, _, err := newCredentialStore()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if k, _ := store.getKey(); k != "rindler_live_fromlogin" {
-		t.Errorf("login must store the minted key, got %q", k)
-	}
-	cfg, _ := loadConfig()
-	if cfg.ClerkUserID != "user_test123" || !cfg.MapperAccess || cfg.Last4 != "ogin" {
-		t.Errorf("config not persisted from the token response: %+v", cfg)
-	}
-
-	// And the MCP is installed with that key, which is the point of logging in.
-	b, err := os.ReadFile(filepath.Join(dir, "claude", ".claude.json"))
-	if err != nil {
-		t.Fatalf("MCP not installed into Claude Code: %v", err)
-	}
-	if !strings.Contains(string(b), "rindler_live_fromlogin") {
-		t.Errorf("agent config should carry the new key, got %s", b)
-	}
-	if !strings.Contains(string(b), "https://mcp.example/mcp") {
-		t.Errorf("agent config should use the server-returned mcp_url, got %s", b)
-	}
-}
-
-func TestLoginNoMapDoesNotRequestMapping(t *testing.T) {
-	isolate(t)
-	os.Unsetenv("RINDLER_API_KEY")
-	forceLoopback(t)
-	stubBrowser(t)
-	var gotQuery url.Values
-	srv := fakeAuthServer(t, false, func(q url.Values) { gotQuery = q })
-
-	if code := run([]string{"login", "--no-map", "--no-mcp", "--api-base", srv.URL, "--authorize-base", srv.URL}); code != 0 {
-		t.Fatalf("login --no-map should exit 0, got %d", code)
-	}
-	if got := gotQuery.Get("mapping_requested"); got == "true" || got == "1" {
-		t.Errorf("--no-map must not request mapping, query was %v", gotQuery)
-	}
-}
-
-func TestLoginNoMCPSkipsAgentInstall(t *testing.T) {
-	dir := isolate(t)
-	os.Unsetenv("RINDLER_API_KEY")
-	forceLoopback(t)
-	stubBrowser(t)
-	srv := fakeAuthServer(t, true, nil)
-
-	if code := run([]string{"login", "--no-mcp", "--api-base", srv.URL, "--authorize-base", srv.URL}); code != 0 {
-		t.Fatalf("login --no-mcp should exit 0, got %d", code)
-	}
-	if _, err := os.ReadFile(filepath.Join(dir, "claude", ".claude.json")); err == nil {
-		t.Error("--no-mcp must not write an agent config")
-	}
-	// The key is still stored — --no-mcp is about the agent install, not the login.
-	store, _, _ := newCredentialStore()
-	if k, _ := store.getKey(); k == "" {
-		t.Error("--no-mcp must still store the key")
-	}
-}
-
-// A rejected exchange must fail loudly and leave NOTHING behind, or the next
-// command reads a half-written state and reports a confusing error.
 func TestLoginFailureStoresNothing(t *testing.T) {
 	isolate(t)
 	os.Unsetenv("RINDLER_API_KEY")

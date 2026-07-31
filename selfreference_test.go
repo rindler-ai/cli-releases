@@ -47,9 +47,9 @@ func TestEveryCommandWeNameActuallyExists(t *testing.T) {
 // list, so DELETING a command makes every message that still mentions it fail
 // here. A hardcoded list would just go stale alongside the messages.
 //
-// It stops at runMCP, because install/status/remove are mcp SUBcommands:
+// It stops at runVault, because status/enable/disable are vault SUBcommands:
 // counting them as top-level would make `rindler install` look valid when the
-// real command is `rindler mcp install`.
+// real command is `rindler vault enable`.
 func topLevelVerbs(t *testing.T) map[string]bool {
 	t.Helper()
 	src, err := os.ReadFile("main.go")
@@ -57,7 +57,7 @@ func topLevelVerbs(t *testing.T) map[string]bool {
 		t.Fatalf("read main.go: %v", err)
 	}
 	body := string(src)
-	if cut := strings.Index(body, "func runMCP"); cut > 0 {
+	if cut := strings.Index(body, "func runVault"); cut > 0 {
 		body = body[:cut]
 	}
 
@@ -72,7 +72,7 @@ func topLevelVerbs(t *testing.T) map[string]bool {
 	if len(verbs) < 10 {
 		t.Fatalf("parsed only %d verbs from main.go — the parser is broken, not the CLI", len(verbs))
 	}
-	for _, must := range []string{"login", "usage", "vault", "device", "doctor", "mcp"} {
+	for _, must := range []string{"login", "run", "usage", "vault", "device", "doctor"} {
 		if !verbs[must] {
 			t.Fatalf("parser missed the %q verb; it is not trustworthy", must)
 		}

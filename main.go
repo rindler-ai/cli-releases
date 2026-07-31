@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -55,13 +56,8 @@ func run(args []string) int {
 		return runStatus()
 	case "whoami":
 		return runWhoami()
-	case "map":
-		return runMap(args[1:])
 	case "run":
-		if len(args) >= 2 && args[1] == "status" {
-			return runRunStatus(args[2:])
-		}
-		return runRun(args[1:])
+		return dispatchRun(args[1:])
 	case "sites":
 		return runSites(args[1:])
 	case "actions":
@@ -80,8 +76,6 @@ func run(args []string) int {
 		return runDevice(args[1:])
 	case "doctor":
 		return runDoctor(args[1:])
-	case "mcp":
-		return runMCP(args[1:])
 	case "version", "--version", "-v":
 		fmt.Println("rindler", version)
 		return 0
@@ -96,44 +90,76 @@ func run(args []string) int {
 }
 
 func usage(w *os.File) {
-	fmt.Fprint(w, `rindler — the Rindler CLI
+	fmt.Fprint(w, `rindler — run a task on a site
 
 Usage:
-  rindler login [--paste] [--no-map] [--no-mcp]  Sign in with Clerk, mint a session-bound MCP key,
-                                                 and install the MCP into Claude Code + Codex
-  rindler run --site <d> --action <a> [--limit N] [--session <name>]
-                                                 Run actions against a site and follow the job
-  rindler run status <job-id> [--once]          Follow a run you already started
-  rindler sites                                  List the sites you can act on\n  rindler sites add <domain>                     Track a site for your workspace
-  rindler actions <site>                         Show a site's actions and their inputs
-  rindler map <url> [--mode fast|deep]           Map a site and follow the run to a verdict
-  rindler map status <job-id> [--once]           Follow a run you already started
-  rindler logout                                 Revoke the key and remove local + agent config
-  rindler status                                 Show login + MCP install status
-  rindler whoami                                 Show the signed-in account
-  rindler mcp install|status|remove              Manage the MCP install for Claude Code + Codex
-  rindler creds add|list|show|rm                  Credentials for a site, encrypted on this device
-  rindler usage [--workspace] [--days N] [--json] Your usage, the same numbers the dashboard shows
-  rindler sessions [--json]                      Named browser sessions on this machine
-  rindler kill <name>                            End a named session
+  rindler run <site> "<what you want done>"      Say it in your own words; Rindler does it
+  rindler login [--paste]                        Sign in
+  rindler logout                                 Sign out on this machine
+  rindler sites                                  The sites you can use
+  rindler sites add <domain>                     Add a site to your workspace
+  rindler creds add|list|show|rm                 Logins for a site, encrypted on this device
+  rindler usage [--workspace] [--days N] [--json] Your automations, the same numbers the dashboard shows
+  rindler sessions [--json]                      Browsers open on this machine
+  rindler kill <name>                            Close one
   rindler vault status|enable|disable            Turn credential custody on this machine on or off
   rindler device status|list|serve               This machine as a paired device, and the relay
+  rindler status                                 Whether you are signed in
+  rindler whoami                                 The signed-in account
   rindler doctor                                 Diagnose a broken setup and print the fix
   rindler version                                Print the version
+
+Examples:
+  rindler run chase.com "download last month's statements"
+  rindler run instacart.com "what do eggs cost at Costco"
 
 The credential vault is OFF until you run "rindler vault enable": until then this
 machine is not paired, is not listed on your dashboard, and no session can ask it
 for a login.
 
-Site mapping is requested at login by default; --no-map opts out. It is granted
-only if your workspace is entitled, and "rindler status" reports which you got.
-
 Environment:
-  RINDLER_API_KEY         Use this key instead of logging in (CI / headless; never persisted)
+  RINDLER_API_KEY         Use this key instead of signing in (CI / headless; never persisted)
   RINDLER_CONFIG_DIR      Override the config dir (default ~/.config/rindler)
-  RINDLER_AUTHORIZE_BASE  Override the dashboard consent origin (default https://app.rindler.ai)
+  RINDLER_AUTHORIZE_BASE  Override the dashboard origin (default https://app.rindler.ai)
   RINDLER_API_BASE        Override the API origin (default https://mcp.rindler.ai)
 `)
+}
+
+// dispatchRun picks between the shapes of `run`.
+//
+// `rindler run <site> "<task>"` is the verb this CLI is FOR, so it is chosen on
+// the shape of the arguments rather than behind an opt-in flag.
+//
+// The structured form (`--site X --action Y`) still works and is deliberately
+// absent from the help. It is config vocabulary -- an action id is a name only
+// someone who has read the mapping knows -- and the product is no longer sold
+// to that person. Keeping it working strands nobody who already scripted
+// against it; documenting it would put the layer we are hiding back on the
+// first screen a new user reads.
+func dispatchRun(args []string) int {
+	switch runShapeFor(args) {
+	case "status":
+		return runRunStatus(args[1:])
+	case "task":
+		return runTask(args[0], args[1], args[2:])
+	default:
+		return runRun(args)
+	}
+}
+
+// runShapeFor is the dispatch DECISION, split out so it can be tested without
+// a network call or a config read. Picking wrong is silent in both directions:
+// the structured form read as a sentence would build an automation out of two
+// flag names, and `run status` read as the task verb would look for a site
+// called "status".
+func runShapeFor(args []string) string {
+	if len(args) >= 1 && args[0] == "status" {
+		return "status"
+	}
+	if len(args) >= 2 && !strings.HasPrefix(args[0], "-") && !strings.HasPrefix(args[1], "-") {
+		return "task"
+	}
+	return "structured"
 }
 
 // runLogout revokes the key server-side (best-effort) and clears local + agent
@@ -214,7 +240,7 @@ func runLogout(args []string) int {
 			fmt.Println("✓ Unpaired this machine.")
 		}
 	}
-	fmt.Println("Removing the Rindler MCP from your agents:")
+	fmt.Println("Cleaning up agent configuration written by older versions:")
 	printAgentResults(os.Stdout, "removed", removeAllAgents())
 	fmt.Println("\n✓ Logged out.")
 	return 0
@@ -247,8 +273,6 @@ func runStatus() int {
 	if warning != "" {
 		fmt.Printf("  note: %s\n", warning)
 	}
-	fmt.Println("\nMCP install:")
-	printAgentResults(os.Stdout, "configured", statusAllAgents())
 	return 0
 }
 
@@ -308,44 +332,4 @@ func whoamiLines(cfg cliConfig) []string {
 		lines = append(lines, "workspace: "+cfg.ClerkUserID)
 	}
 	return lines
-}
-
-// runMCP handles `rindler mcp <install|status|remove>`.
-func runMCP(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: rindler mcp install|status|remove")
-		return 2
-	}
-	switch args[0] {
-	case "install":
-		cfg, _ := loadConfig()
-		store, _, err := newCredentialStore()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "mcp install:", err)
-			return 1
-		}
-		key, _, err := resolveActiveKey(store)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "mcp install:", err)
-			return 1
-		}
-		if key == "" {
-			fmt.Fprintln(os.Stderr, "not logged in — run `rindler login` first (or set RINDLER_API_KEY)")
-			return 1
-		}
-		fmt.Println("Installing the Rindler MCP into your agents:")
-		printAgentResults(os.Stdout, "configured", installAllAgents(mcpEndpoint(cfg), key))
-		fmt.Println("\nRestart Claude Code / Codex to connect.")
-		return 0
-	case "status":
-		printAgentResults(os.Stdout, "configured", statusAllAgents())
-		return 0
-	case "remove":
-		fmt.Println("Removing the Rindler MCP from your agents:")
-		printAgentResults(os.Stdout, "removed", removeAllAgents())
-		return 0
-	default:
-		fmt.Fprintf(os.Stderr, "unknown mcp subcommand %q (want install|status|remove)\n", args[0])
-		return 2
-	}
 }
