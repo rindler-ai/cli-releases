@@ -11,6 +11,13 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Bounded because nothing else bounds it. An unbounded hosted job is what
+    # took org-wide Actions billing down on 2026-08-19: a hanging macOS job with
+    # no ceiling burned the balance until everything stopped starting. This job
+    # is stdlib-only gofmt/vet/test plus four cross-builds -- the sibling
+    # `release` job does strictly more work and completed in 87s -- so ten
+    # minutes is a hang detector, not a budget.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
