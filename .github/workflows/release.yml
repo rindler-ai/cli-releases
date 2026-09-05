@@ -26,6 +26,12 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Bounded for the 2026-08-19 reason (see ci.yml), and it matters more here:
+    # /dl serves releases/latest within ~60s of a tag push, so this job holds the
+    # path every new install takes. A hang here is an unpublished release AND a
+    # burning balance. Measured 87s end to end on 2026-08-20; fifteen minutes
+    # leaves room for a slow runner without leaving room for a hang.
+    timeout-minutes: 15
     steps:
       # Check out the TAG being released, not the default branch. Without this
       # a workflow_dispatch run publishes whatever is on main under the tag's
