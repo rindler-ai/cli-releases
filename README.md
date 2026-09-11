@@ -2,6 +2,10 @@
 
 [![License: LGPL v3](https://img.shields.io/badge/License-LGPL_v3-blue.svg)](./LICENSE)
 
+> **Retired.** The Rindler web-automation product stopped operating on August 20,
+> 2026, so `rindler login` and `rindler run` cannot connect. This repository is
+> kept for reference only; everything below describes how the CLI worked.
+
 Run a task on a website by saying what you want done.
 
 ```sh
@@ -14,10 +18,11 @@ in your OS keyring. Nothing else to configure.
 
 ## Install
 
-**The `rindler` CLI is retired.** Its installer at `rindler.ai/cli` is no longer
-served, and the Rindler service it signs in to has been shut down, so
-`rindler login` and `rindler run` cannot connect. This repository is kept for
-reference only; there is nothing left to install.
+**There is nothing left to install.** `rindler.ai/cli` now serves a retirement
+notice instead of an installer, and `rindler.ai/dl` no longer proxies release
+assets. The binaries on the
+[Releases](https://github.com/rindler-ai/cli-releases/releases/latest) page are
+still there, but the service they sign in to is gone.
 
 ## Commands
 
@@ -140,8 +145,9 @@ release needs **no credential anywhere**:
 - The build runs in this repo, so the release is cut with the automatic
   `github.token`. Publishing from a private monorepo into this one would have
   required a long-lived personal access token.
-- This repo is public, so `https://rindler.ai/dl` proxies the release assets
-  anonymously rather than holding a GitHub token at the public edge.
+- This repo is public, so `https://rindler.ai/dl` proxied the release assets
+  anonymously rather than holding a GitHub token at the public edge. That route
+  was taken down with the rest of the CLI distribution.
 
 ## License
 
