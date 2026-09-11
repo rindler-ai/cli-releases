@@ -14,18 +14,10 @@ in your OS keyring. Nothing else to configure.
 
 ## Install
 
-```sh
-curl https://rindler.ai/cli | sh
-rindler login
-```
-
-The install script detects your OS/arch, downloads the matching binary, verifies
-its SHA-256 against `SHA256SUMS.txt`, and installs to `/usr/local/bin` (or
-`~/.local/bin` when that is not writable).
-
-Prefer to do it by hand? Grab a binary from
-[Releases](https://github.com/rindler-ai/cli-releases/releases/latest), check it
-against `SHA256SUMS.txt`, `chmod +x`, and put it on your `PATH`.
+**The `rindler` CLI is retired.** Its installer at `rindler.ai/cli` is no longer
+served, and the Rindler service it signs in to has been shut down, so
+`rindler login` and `rindler run` cannot connect. This repository is kept for
+reference only; there is nothing left to install.
 
 ## Commands
 
