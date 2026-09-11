@@ -85,7 +85,21 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           assets="rindler-linux-amd64 rindler-linux-arm64 rindler-darwin-amd64 rindler-darwin-arm64 SHA256SUMS.txt"
-          notes="Rindler CLI ($TAG). Install: \`curl https://rindler.ai/cli | sh\`, then \`rindler login\`."
+          # The notes must not advertise an installer that was retired. The
+          # Rindler web-automation product stopped operating on 2026-08-20:
+          # https://rindler.ai/cli now serves a 306-byte notice that prints one
+          # line to stderr and exits 1, and the two hosts this CLI talks to --
+          # app.rindler.ai (consent, authflow.go:22) and mcp.rindler.ai (API,
+          # authflow.go:23) -- are NXDOMAIN against the zone's own nameservers.
+          # The published v0.8.9 body carried the old line until 2026-09-11 and
+          # was corrected by hand; this is the generator, so leaving it alone
+          # would have put the dead line back on the next created release.
+          #
+          # Note for whoever reads this next: re-running the job for an EXISTING
+          # tag does not rewrite the body -- that path is `gh release upload
+          # --clobber`, which replaces assets only. These notes are used solely
+          # on the create path below.
+          notes="Rindler CLI ($TAG). The Rindler web-automation product stopped operating on August 20, 2026, and this CLI no longer works: the installer at https://rindler.ai/cli was retired and installs nothing, and the services it signed into (app.rindler.ai for the consent flow, mcp.rindler.ai for the API) no longer resolve. The binaries below are published for the record. Questions: founders@rindler.ai"
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             echo "release $TAG exists; replacing its assets"
             # shellcheck disable=SC2086
